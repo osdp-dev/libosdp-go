@@ -1,0 +1,4 @@
+[submodule "libosdp"]
+	path = libosdp
+	url = https://github.com/goToMain/libosdp
+	branch = master

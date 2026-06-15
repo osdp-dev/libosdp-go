@@ -1,0 +1,46 @@
+#
+# Copyright (c) 2026 Siddharth Chandrasekaran <sidcha@osdp.dev>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Verify vendored C sources match the submodule
+        run: |
+          go generate .
+          # osdp_config.h embeds the submodule's git description; exclude it.
+          git diff --exit-code -- . ':(exclude)internal/clib/src/osdp_config.h' || {
+            echo "Vendored C sources are stale; run 'go generate .' and commit.";
+            exit 1;
+          }
+      - name: Vet and build
+        run: |
+          go vet .
+          go build .
+      - name: Test (race detector)
+        run: go test -race -v .
+      - name: Build examples
+        run: |
+          for d in examples/*/ examples/api_showcase/companion_pd/; do
+            if ls "$d"*.go >/dev/null 2>&1; then
+              (cd "$d" && go build .)
+            fi
+          done

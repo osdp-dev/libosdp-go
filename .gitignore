@@ -1,0 +1,14 @@
+# Go test / coverage artifacts
+*.test
+*.out
+coverage.*
+
+# Editor / OS
+.DS_Store
+tags
+*.tags
+*.swp
+
+# NOTE: the vendored C sources under internal/clib/ (*.c, headers, and
+# src/osdp_config.h) and go.mod are intentionally tracked — they are what
+# `go get` compiles. Do not ignore them.

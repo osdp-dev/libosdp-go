@@ -1,0 +1,18 @@
+# Go build artifacts
+# Compiled binaries (named after their directory)
+api_showcase/api_showcase
+api_showcase/companion_pd/companion_pd
+cp_sample/cp_sample
+file_transfer/file_transfer
+file_transfer/file_transfer/received_files/
+logging/logging
+multi_pd_cp/multi_pd_cp
+multi_pd_device/multi_pd_device
+pd_sample/pd_sample
+
+# Windows executables
+*.exe
+
+# Go dependency files
+go.sum
+*/go.sum
