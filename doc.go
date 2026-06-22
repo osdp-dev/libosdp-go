@@ -34,7 +34,7 @@ Two main types: ControlPanel (one bus, one or more PDs) and PeripheralDevice
 	defer cp.Stop()
 
 For a runnable PD example, a complete CP↔PD walkthrough, and patterns for
-multi-drop buses, see the examples/go/ tree in the repository.
+multi-drop buses, see the examples/ tree in the repository.
 
 # Channels
 
