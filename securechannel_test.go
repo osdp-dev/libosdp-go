@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // TestSecureChannel tests secure channel establishment

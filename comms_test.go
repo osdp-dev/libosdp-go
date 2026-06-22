@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // TestBasicCPPDCommunication tests basic communication between CP and PD

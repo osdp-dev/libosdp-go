@@ -48,4 +48,4 @@ jobs:
           # the tag itself is the real publish, so a transient proxy lag here
           # must not fail the release.
           GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
-            go get "github.com/Osprio/libosdp-go@${GITHUB_REF_NAME}" || true
+            go get "github.com/osdp-dev/libosdp-go@${GITHUB_REF_NAME}" || true

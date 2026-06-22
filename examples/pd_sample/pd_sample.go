@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // commandHandler handles commands from the control panel

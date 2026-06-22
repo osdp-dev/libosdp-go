@@ -9,7 +9,7 @@ package osdp_test
 import (
 	"testing"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // TestAPIcoverage tests newly implemented APIs to ensure they work correctly

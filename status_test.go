@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // TestStatusAndMfgCommands tests STATUS and MFG commands

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // TestKeyStore exercises the pure-Go SCBK key store.

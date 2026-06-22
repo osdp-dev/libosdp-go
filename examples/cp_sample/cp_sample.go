@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // eventHandler handles events from peripheral devices

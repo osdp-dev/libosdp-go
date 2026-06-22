@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 // Example 1: Using standard Go log package

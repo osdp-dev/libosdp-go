@@ -23,4 +23,4 @@ import "C"
 // Link the vendored LibOSDP C object code (compiled by the internal/clib cgo
 // package) into any binary that uses this package. internal/clib exposes no Go
 // API; the blank import exists purely to pull in its compiled libosdp symbols.
-import _ "github.com/Osprio/libosdp-go/internal/clib"
+import _ "github.com/osdp-dev/libosdp-go/internal/clib"

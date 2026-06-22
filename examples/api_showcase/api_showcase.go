@@ -29,7 +29,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 type DemoState struct {

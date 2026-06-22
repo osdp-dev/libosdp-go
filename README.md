@@ -1,7 +1,7 @@
 # LibOSDP — Go Bindings
 
-[![CI](https://github.com/Osprio/libosdp-go/actions/workflows/ci.yml/badge.svg)](https://github.com/Osprio/libosdp-go/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/Osprio/libosdp-go.svg)](https://pkg.go.dev/github.com/Osprio/libosdp-go)
+[![CI](https://github.com/osdp-dev/libosdp-go/actions/workflows/ci.yml/badge.svg)](https://github.com/osdp-dev/libosdp-go/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/osdp-dev/libosdp-go.svg)](https://pkg.go.dev/github.com/osdp-dev/libosdp-go)
 [![Docs](https://img.shields.io/badge/docs-doc.osdp.dev-blue.svg)](https://doc.osdp.dev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -15,7 +15,7 @@ submodule), alongside the Rust bindings in
 ## Installation
 
 ```bash
-go get github.com/Osprio/libosdp-go
+go get github.com/osdp-dev/libosdp-go
 ```
 
 That's it. The LibOSDP C sources are vendored into the module and compiled by cgo
@@ -36,7 +36,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/Osprio/libosdp-go"
+	"github.com/osdp-dev/libosdp-go"
 )
 
 func main() {
@@ -135,5 +135,5 @@ Apache 2.0 — see [LICENSE](LICENSE).
 
 - Project home: <https://osdp.dev>
 - Documentation: <https://doc.osdp.dev>
-- Issues: <https://github.com/Osprio/libosdp-go/issues>
+- Issues: <https://github.com/osdp-dev/libosdp-go/issues>
 - Discussions: <https://github.com/osdp-dev/libosdp/discussions>
