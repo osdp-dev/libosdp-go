@@ -1,0 +1,51 @@
+#
+# Copyright (c) 2026 Siddharth Chandrasekaran <sidcha@osdp.dev>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Go has no upload-based registry: a module is "published" the moment a semver
+# tag is pushed, and proxy.golang.org / pkg.go.dev index it on first request.
+# So this workflow does not publish anything — on a pushed v* tag it verifies
+# the tagged commit still builds and tests, cuts a GitHub Release for humans,
+# then warms the proxy so `go get ...@<tag>` and the docs are ready instantly.
+
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write   # required to create the GitHub Release
+
+jobs:
+  release:
+    name: Verify and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: Vet, build, and test the tagged commit
+        run: |
+          go vet .
+          go build .
+          go test -race .
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+      - name: Warm proxy.golang.org and pkg.go.dev
+        run: |
+          dir="$(mktemp -d)"
+          cd "$dir"
+          go mod init proxywarm >/dev/null
+          # `go get` against the public proxy fetches the new version, which is
+          # what triggers proxy caching and pkg.go.dev indexing. Best-effort:
+          # the tag itself is the real publish, so a transient proxy lag here
+          # must not fail the release.
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+            go get "github.com/Osprio/libosdp-go@${GITHUB_REF_NAME}" || true

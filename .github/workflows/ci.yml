@@ -8,21 +8,27 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ '**' ]
   pull_request:
     branches: [ master ]
 
 jobs:
   build:
-    name: Build and test
+    name: Build and test (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # '1.21' is the floor declared in go.mod; 'stable' tracks the latest
+        # release so version regressions surface before users hit them.
+        go: [ '1.21', 'stable' ]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: ${{ matrix.go }}
       - name: Verify vendored C sources match the submodule
         run: |
           go generate .

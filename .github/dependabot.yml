@@ -1,0 +1,49 @@
+#
+# Copyright (c) 2026 Siddharth Chandrasekaran <sidcha@osdp.dev>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dependabot covers every dependency surface this repo actually has:
+#   - gomod          : the Go module's third-party requirements
+#   - github-actions : the action versions pinned in .github/workflows
+#   - gitsubmodule   : the upstream libosdp/ source-of-truth submodule
+#
+# Note on gitsubmodule: bumping the libosdp pointer does NOT regenerate the
+# vendored C under internal/clib, so these PRs will fail CI's "Verify vendored
+# C sources" check until a maintainer runs `go generate .` and commits. Treat
+# such PRs as a "new libosdp upstream is available" signal, not auto-mergeable.
+
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "go"]
+    commit-message:
+      prefix: "gomod"
+    groups:
+      go-modules:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "submodule"]
+    commit-message:
+      prefix: "submodule"
