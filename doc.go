@@ -3,7 +3,8 @@ Package osdp provides Go bindings for the LibOSDP C library.
 
 LibOSDP is a library implementation of IEC 60839-11-5 Open Supervised Device
 Protocol (OSDP), a communication protocol for secure exchange between Control
-Panels (CP) and Peripheral Devices (PD) in access control systems.
+Panels (CP) and Peripheral Devices (PD) in access control systems. See
+https://osdp.dev for an overview of the protocol and the LibOSDP project.
 
 The package wraps the C API with idiomatic Go: interfaces for channels,
 goroutine-managed refresh loops (20ms per the OSDP standard), and Go errors
@@ -70,5 +71,11 @@ Requires Go 1.21+ and a C compiler. The LibOSDP C sources are vendored into the
 internal/clib package and compiled by cgo, so no prebuilt library or external
 link dependency is needed. Maintainers refresh the vendored copy from the
 libosdp/ submodule with "go generate .".
+
+# See Also
+
+  - OSDP protocol and the LibOSDP project: https://osdp.dev
+  - Documentation: https://doc.osdp.dev
+  - LibOSDP C library: https://github.com/osdp-dev/libosdp
 */
 package osdp

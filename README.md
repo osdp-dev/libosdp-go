@@ -2,14 +2,15 @@
 
 [![CI](https://github.com/Osprio/libosdp-go/actions/workflows/ci.yml/badge.svg)](https://github.com/Osprio/libosdp-go/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Osprio/libosdp-go.svg)](https://pkg.go.dev/github.com/Osprio/libosdp-go)
+[![Docs](https://img.shields.io/badge/docs-doc.osdp.dev-blue.svg)](https://doc.osdp.dev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Go bindings for [LibOSDP](https://libosdp.sidcha.dev/), an implementation of the
-IEC 60839-11-5 Open Supervised Device Protocol used in physical access-control
-systems. This is a child project of
-[goToMain/libosdp](https://github.com/goToMain/libosdp) (tracked here as a git
+Go bindings for [LibOSDP](https://github.com/osdp-dev/libosdp), an implementation
+of the IEC 60839-11-5 [Open Supervised Device Protocol](https://osdp.dev) used in
+physical access-control systems. This is a child project of
+[osdp-dev/libosdp](https://github.com/osdp-dev/libosdp) (tracked here as a git
 submodule), alongside the Rust bindings in
-[goToMain/libosdp-rs](https://github.com/goToMain/libosdp-rs).
+[osdp-dev/libosdp-rs](https://github.com/osdp-dev/libosdp-rs).
 
 ## Installation
 
@@ -132,6 +133,7 @@ Apache 2.0 — see [LICENSE](LICENSE).
 
 ## Support
 
-- Documentation: <https://libosdp.sidcha.dev/>
+- Project home: <https://osdp.dev>
+- Documentation: <https://doc.osdp.dev>
 - Issues: <https://github.com/Osprio/libosdp-go/issues>
-- Discussions: <https://github.com/goToMain/libosdp/discussions>
+- Discussions: <https://github.com/osdp-dev/libosdp/discussions>
