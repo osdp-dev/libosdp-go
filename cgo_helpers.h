@@ -159,8 +159,32 @@ static inline void get_event_status(struct osdp_event *ev, uint8_t *type, uint8_
 
 static inline void get_event_notification(struct osdp_event *ev, int *type, int *arg0, int *arg1) {
     *type = ev->notif.type;
-    *arg0 = ev->notif.arg0;
-    *arg1 = ev->notif.arg1;
+    switch (ev->notif.type) {
+    case OSDP_NOTIFICATION_COMMAND:
+        *arg0 = ev->notif.command.command;
+        *arg1 = ev->notif.command.success ? 1 : 0;
+        break;
+    case OSDP_NOTIFICATION_SC_STATUS:
+        *arg0 = ev->notif.sc_status.active ? 1 : 0;
+        *arg1 = ev->notif.sc_status.scbk_d ? 1 : 0;
+        break;
+    case OSDP_NOTIFICATION_PD_STATUS:
+        *arg0 = ev->notif.pd_status.online ? 1 : 0;
+        *arg1 = 0;
+        break;
+    case OSDP_NOTIFICATION_MP_START:
+    case OSDP_NOTIFICATION_MP_PROGRESS:
+    case OSDP_NOTIFICATION_MP_DONE:
+        /* offset/total are the progress-relevant fields; outcome is
+         * only meaningful on MP_DONE. Full typed decode is Phase 2. */
+        *arg0 = (int)ev->notif.mp.offset;
+        *arg1 = (int)ev->notif.mp.total;
+        break;
+    default:
+        *arg0 = 0;
+        *arg1 = 0;
+        break;
+    }
 }
 
 static inline void set_event_cardread(struct osdp_event *ev, uint8_t reader_no, uint8_t format, uint8_t direction, int length_bits, uint8_t *data, int data_len) {

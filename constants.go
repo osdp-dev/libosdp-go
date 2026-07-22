@@ -115,8 +115,13 @@ const (
 	StatusReportInput  OsdpStatusReportType = C.OSDP_STATUS_REPORT_INPUT
 	StatusReportOutput OsdpStatusReportType = C.OSDP_STATUS_REPORT_OUTPUT
 	StatusReportLocal  OsdpStatusReportType = C.OSDP_STATUS_REPORT_LOCAL
-	StatusReportRemote OsdpStatusReportType = C.OSDP_STATUS_REPORT_REMOTE
+	StatusReportReader OsdpStatusReportType = C.OSDP_STATUS_REPORT_READER
 )
+
+// Deprecated: OSDP_STATUS_REPORT_REMOTE was renamed to
+// OSDP_STATUS_REPORT_READER upstream (same ordinal, per-reader byte
+// semantics). Use StatusReportReader.
+const StatusReportRemote = StatusReportReader
 
 // OsdpLedColor represents LED color options
 type OsdpLedColor int
@@ -139,7 +144,9 @@ const (
 	NotificationCommand    NotificationType = C.OSDP_NOTIFICATION_COMMAND
 	NotificationSCStatus   NotificationType = C.OSDP_NOTIFICATION_SC_STATUS
 	NotificationPDStatus   NotificationType = C.OSDP_NOTIFICATION_PD_STATUS
-	NotificationFileTxDone NotificationType = C.OSDP_NOTIFICATION_FILE_TX_DONE
+	NotificationMPStart    NotificationType = C.OSDP_NOTIFICATION_MP_START
+	NotificationMPProgress NotificationType = C.OSDP_NOTIFICATION_MP_PROGRESS
+	NotificationMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
 )
 
 // FileTxOutcome is the outcome reported by a FILE_TX_DONE notification (arg1).
