@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +37,27 @@
 #define OSDP_CTX_MAGIC 0xDEADBEEF
 
 #define ARG_UNUSED(x) (void)(x)
+
+/*
+ * OSDP_TEST_ALIAS(fn) exposes an internal function to an out-of-module driver
+ * without touching its definition. Under UNIT_TESTING (the in-tree tests) or
+ * OSDP_UNIT_TESTABLE (an embedder opting in to drive libosdp internals) it
+ * emits a test_<fn> alias of fn -- which may be static -- so a caller in
+ * another translation unit reaches it by forward-declaring test_<fn>. It must
+ * appear after fn's definition and in the same translation unit. In a normal
+ * build it expands to a harmless forward declaration: no test_* symbols reach
+ * shipping images and every function keeps its original linkage.
+ *
+ * This replaces the older idiom of a hand-written test_<fn> function pointer:
+ * the alias binds to fn by name (no signature can drift), costs no .data slot,
+ * and adds no indirection at the call site.
+ */
+#if defined(UNIT_TESTING) || defined(OSDP_UNIT_TESTABLE)
+#define OSDP_TEST_ALIAS(fn) \
+	extern __typeof__(fn) test_##fn __attribute__((alias(#fn)))
+#else
+#define OSDP_TEST_ALIAS(fn) struct osdp_test_alias_##fn /* swallow the ';' */
+#endif
 
 #ifdef OPT_OSDP_LOG_MINIMAL
 
@@ -121,6 +143,13 @@ do {\
 #define BYTE_1(x) (uint8_t)(((x) >> 8) & 0xFF)
 #define BYTE_2(x) (uint8_t)(((x) >> 16) & 0xFF)
 #define BYTE_3(x) (uint8_t)(((x) >> 24) & 0xFF)
+
+/*
+ * Round a bit count up to whole bytes. Widened to uint32_t because the
+ * operand is a uint16_t wire value: it would otherwise promote to int, and
+ * 0xFFFF + 7 overflows an int that is only 16 bits wide on some targets.
+ */
+#define BITS_TO_BYTES(n) ((int)(((uint32_t)(n) + 7) / 8))
 
 /* casting helpers */
 #define TO_OSDP(ctx)  ((struct osdp *)ctx)
@@ -213,8 +242,8 @@ static inline __noreturn void die()
 #define CMD_LED		 0x69
 #define CMD_BUZ		 0x6A
 #define CMD_TEXT	 0x6B
-#define CMD_RMODE	 0x6C
-#define CMD_TDSET	 0x6D
+#define CMD_RMODE	 0x6C /* deprecated: removed from the spec */
+#define CMD_TDSET	 0x6D /* obsolete in spec; kept for legacy interop */
 #define CMD_COMSET	 0x6E
 #define CMD_BIOREAD	 0x73
 #define CMD_BIOMATCH	 0x74
@@ -262,6 +291,47 @@ static inline __noreturn void die()
 #define REPLY_XRD	0xB1
 
 /**
+ * @brief Number of data bytes that follow the command/reply ID byte.
+ *
+ * The encoders (cp_build_command(), pd_build_reply()) write the ID byte and
+ * the decoders (pd_decode_command(), cp_decode_response()) consume it, both
+ * outside of their per-message switch. These lengths therefore describe the
+ * data block alone and are shared by both sides of the wire. For variable
+ * length messages, they cover only the fixed part that precedes the payload.
+ * Messages that carry no data at all are simply absent from this list.
+ */
+#define CMD_ID_DATA_LEN           1
+#define CMD_CAP_DATA_LEN          1
+#define CMD_OUT_DATA_LEN          4
+#define CMD_LED_DATA_LEN          14
+#define CMD_BUZ_DATA_LEN          5
+#define CMD_TEXT_DATA_LEN         6  /* variable length message */
+#define CMD_TDSET_DATA_LEN        7
+#define CMD_COMSET_DATA_LEN       5
+#define CMD_BIOREAD_DATA_LEN      4
+#define CMD_BIOMATCH_DATA_LEN     6  /* variable length message */
+#define CMD_KEYSET_DATA_LEN       18
+#define CMD_CHLNG_DATA_LEN        8
+#define CMD_SCRYPT_DATA_LEN       16
+#define CMD_ACURXSIZE_DATA_LEN    2
+#define CMD_KEEPACTIVE_DATA_LEN   2
+#define CMD_MFG_DATA_LEN          3  /* variable length message */
+#define CMD_PIVDATA_DATA_LEN      5
+
+#define REPLY_NAK_DATA_LEN        1
+#define REPLY_PDID_DATA_LEN       12
+#define REPLY_PDCAP_ENTITY_LEN    3  /* variable count of these entities */
+#define REPLY_LSTATR_DATA_LEN     2
+#define REPLY_COM_DATA_LEN        5
+#define REPLY_KEYPAD_DATA_LEN     2  /* variable length message */
+#define REPLY_RAW_DATA_LEN        4  /* variable length message */
+#define REPLY_MFGREP_DATA_LEN     3  /* variable length message */
+#define REPLY_BIOREADR_DATA_LEN   6  /* variable length message */
+#define REPLY_BIOMATCHR_DATA_LEN  3
+#define REPLY_CCRYPT_DATA_LEN     32
+#define REPLY_RMAC_I_DATA_LEN     16
+
+/**
  * @brief secure block types
  */
 #define SCS_11 0x11 /* CP -> PD -- CMD_CHLNG */
@@ -278,7 +348,7 @@ static inline __noreturn void die()
 #define PD_FLAG_SC_CAPABLE     BIT(0)  /* PD secure channel capable */
 #define PD_FLAG_TAMPER         BIT(1)  /* local tamper status */
 #define PD_FLAG_POWER          BIT(2)  /* local power status */
-#define PD_FLAG_R_TAMPER       BIT(3)  /* remote tamper status */
+#define PD_FLAG_R_TAMPER       BIT(3)  /* reader tamper status */
 #define PD_FLAG_SKIP_SEQ_CHECK BIT(5)  /* disable seq checks (debug) */
 #define PD_FLAG_SC_USE_SCBKD   BIT(6)  /* in this SC attempt, use SCBKD */
 #define PD_FLAG_SC_ACTIVE      BIT(7)  /* secure channel is active */
@@ -297,6 +367,7 @@ static inline __noreturn void die()
 #define PD_FLAG_ENABLE_NOTIF    BIT(27) /* See: OSDP_FLAG_ENABLE_NOTIFICATION */
 #define PD_FLAG_CAPTURE_PKT     BIT(28) /* See: OSDP_FLAG_CAPTURE_PACKETS */
 #define PD_FLAG_ALLOW_EMPTY_EDB BIT(29) /* See: OSDP_FLAG_ALLOW_EMPTY_ENCRYPTED_DATA_BLOCK */
+#define PD_FLAG_BIOREADR_MP     BIT(30) /* See: OSDP_FLAG_BIOREADR_MULTIPART */
 
 /* CP event requests; used with make_request() and check_request() */
 #define CP_REQ_RESTART_SC              0x00000001
@@ -434,7 +505,7 @@ struct osdp_pd {
 	tick_t tstamp;         /* Last POLL command issued time in ticks */
 	tick_t sc_tstamp;      /* Last received secure reply time in ticks */
 	tick_t phy_tstamp;     /* Time in ticks since command was sent */
-	tick_t resp_expected;  /* Time in ticks when the response is expected */
+	uint32_t resp_timeout_ms; /* Wait time in MS before a response is due */
 	uint32_t request;      /* Event loop requests */
 
 	uint16_t peer_rx_size; /* Receive buffer size of the peer PD/CP */
@@ -483,6 +554,8 @@ struct osdp_pd {
 
 	struct osdp_secure_channel sc;   /* Secure Channel session context */
 	struct osdp_file *file;          /* File transfer context */
+	struct osdp_piv *piv;            /* Smartcard/PIV multipart context */
+	struct osdp_bio *bio;            /* Biometric read multipart context */
 	struct osdp_metrics metrics;     /* link/protocol health counters */
 
 	/* PD command callback to app with opaque arg pointer as passed by app */
@@ -533,12 +606,23 @@ void osdp_phy_progress_sequence(struct osdp_pd *pd);
 void osdp_phy_release_packet(struct osdp_pd *pd);
 
 /* --- from osdp_common.c --- */
+#ifdef UTILS_UNKNOWN_TARGET
+/* Strong declaration: a target utils cannot identify must supply the tick
+ * source itself, and a missing one must be a link error. A __weak undefined
+ * reference would quietly resolve to NULL and be called. */
+tick_t osdp_millis_now(void);
+#else
 __weak tick_t osdp_millis_now(void);
+#endif
 tick_t osdp_millis_since(tick_t last);
 uint16_t osdp_compute_crc16(const uint8_t *buf, size_t len);
 
 const char *osdp_cmd_name(int cmd_id);
 const char *osdp_reply_name(int reply_id);
+
+/* Targeted reader number for commands/events that carry one, else -1. */
+int osdp_cmd_reader_no(const struct osdp_cmd *cmd);
+int osdp_event_reader_no(const struct osdp_event *event);
 
 int osdp_rb_push(struct osdp_rb *p, uint8_t data);
 int osdp_rb_push_buf(struct osdp_rb *p, uint8_t *buf, int len);
@@ -572,9 +656,9 @@ void osdp_sc_teardown(struct osdp_pd *pd);
 
 static inline uint16_t bread_u16_le(const uint8_t *buf, int *pos)
 {
-    uint16_t v = buf[(*pos)++];
-    v |= (uint16_t)buf[(*pos)++] << 8;
-    return v;
+    uint32_t v = buf[(*pos)++];
+    v |= (uint32_t)buf[(*pos)++] << 8;
+    return (uint16_t)v;
 }
 
 static inline uint32_t bread_u24_le(const uint8_t *buf, int *pos)
@@ -626,9 +710,9 @@ static inline void bwrite_u32_le(uint32_t val, uint8_t *buf, int *len)
 
 static inline uint16_t bread_u16_be(const uint8_t *buf, int *pos)
 {
-    uint16_t v = (uint16_t)buf[(*pos)++] << 8;
+    uint32_t v = (uint32_t)buf[(*pos)++] << 8;
     v |= buf[(*pos)++];
-    return v;
+    return (uint16_t)v;
 }
 
 static inline uint32_t bread_u24_be(const uint8_t *buf, int *pos)
@@ -790,6 +874,10 @@ static inline bool sc_allow_empty_encrypted_data_block(struct osdp_pd *pd) {
 	return ISSET_FLAG(pd, PD_FLAG_ALLOW_EMPTY_EDB);
 }
 
+static inline bool is_bioreadr_multipart(struct osdp_pd *pd) {
+	return ISSET_FLAG(pd, PD_FLAG_BIOREADR_MP);
+}
+
 static inline bool is_enforce_secure(struct osdp_pd *pd)
 {
 	return ISSET_FLAG(pd, PD_FLAG_ENFORCE_SECURE);
@@ -810,29 +898,82 @@ static inline bool is_install_mode(struct osdp_pd *pd) {
 /* --- CP Alloc Helpers --- */
 
 #ifdef OPT_OSDP_STATIC
+
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+/*
+ * Exclusive-role arena: a context is either CP or PD. When a build only ever runs
+ * one role at a time, the inactive role's pool sits idle for the lifetime of
+ * the active one, so overlaying the CP and PD static pools in a union reclaims
+ * the smaller (PD) pool's worth of BSS.
+ *
+ * Opt-in only: leaving OPT_OSDP_EXCLUSIVE_ROLE undefined keeps the CP and PD
+ * pools as independent storage, which is required when a CP and a PD context
+ * are instantiated at the same time. One external instance (defined in
+ * osdp_common.c) is shared across the osdp_cp.c / osdp_pd.c TUs.
+ */
+union osdp_role_arena {
+	struct {
+		struct osdp        ctx;
+		struct osdp_pd     pd[OSDP_CP_MAX_PDS];
+#ifdef OPT_OSDP_RX_ZERO_COPY
+		struct osdp_rx_pkt rx_pkt[OSDP_CP_MAX_PDS];
+#else
+		struct osdp_rb     rb[OSDP_CP_MAX_PDS];
+#endif
+	} cp;
+	struct {
+		struct osdp        ctx;
+		struct osdp_pd     pd;
+		uint8_t            rx_buf[OSDP_PACKET_BUF_SIZE];
+#ifdef OPT_OSDP_RX_ZERO_COPY
+		struct osdp_rx_pkt rx_pkt;
+#else
+		struct osdp_rb     rb;
+#endif
+	} pd;
+};
+extern union osdp_role_arena g_osdp_role_arena;
+#endif /* OPT_OSDP_EXCLUSIVE_ROLE */
+
 static inline struct osdp *cp_static_ctx_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return &g_osdp_role_arena.cp.ctx;
+#else
 	static struct osdp g_osdp_ctx;
 	return &g_osdp_ctx;
+#endif
 }
 
 static inline struct osdp_pd *cp_static_pd_array_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return g_osdp_role_arena.cp.pd;
+#else
 	static struct osdp_pd g_cp_pd_ctx[OSDP_CP_MAX_PDS];
 	return g_cp_pd_ctx;
+#endif
 }
 
 #ifdef OPT_OSDP_RX_ZERO_COPY
 static inline struct osdp_rx_pkt *cp_static_rx_pkt_array_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return g_osdp_role_arena.cp.rx_pkt;
+#else
 	static struct osdp_rx_pkt g_cp_rx_pkt[OSDP_CP_MAX_PDS];
 	return g_cp_rx_pkt;
+#endif
 }
 #else /* OPT_OSDP_RX_ZERO_COPY */
 static inline struct osdp_rb *cp_static_rx_rb_array_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return g_osdp_role_arena.cp.rb;
+#else
 	static struct osdp_rb g_cp_rb[OSDP_CP_MAX_PDS];
 	return g_cp_rb;
+#endif
 }
 #endif /* OPT_OSDP_RX_ZERO_COPY */
 #endif /* OPT_OSDP_STATIC */
@@ -906,36 +1047,56 @@ static inline struct osdp_rb *cp_rx_rb_alloc(int pd_idx)
 
 static inline struct osdp *pd_static_ctx_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return &g_osdp_role_arena.pd.ctx;
+#else
 	static struct osdp g_osdp_ctx;
 	return &g_osdp_ctx;
+#endif
 }
 
 static inline struct osdp_pd *pd_static_ctx_pd_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return &g_osdp_role_arena.pd.pd;
+#else
 	static struct osdp_pd g_osdp_pd_ctx;
 	return &g_osdp_pd_ctx;
+#endif
 }
 
 static inline uint8_t *pd_static_rx_buf_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return g_osdp_role_arena.pd.rx_buf;
+#else
 	static uint8_t g_osdp_pd_rx_buf[OSDP_PACKET_BUF_SIZE];
 	return g_osdp_pd_rx_buf;
+#endif
 }
 
 #ifdef OPT_OSDP_RX_ZERO_COPY
 
 static inline struct osdp_rx_pkt *pd_static_rx_pkt_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return &g_osdp_role_arena.pd.rx_pkt;
+#else
 	static struct osdp_rx_pkt g_osdp_rx_pkt;
 	return &g_osdp_rx_pkt;
+#endif
 }
 
 #else /* OPT_OSDP_RX_ZERO_COPY */
 
 static inline struct osdp_rb *pd_static_rx_rb_get(void)
 {
+#ifdef OPT_OSDP_EXCLUSIVE_ROLE
+	return &g_osdp_role_arena.pd.rb;
+#else
 	static struct osdp_rb g_osdp_rb;
 	return &g_osdp_rb;
+#endif
 }
 
 #endif /* OPT_OSDP_RX_ZERO_COPY */

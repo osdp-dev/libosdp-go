@@ -13,8 +13,17 @@
 #include <string.h>
 
 #include "osdp_common.h"
+#include "osdp_multipart.h"
+#include "osdp_metrics.h"
 
 #include <utils/crc16.h>
+
+#if defined(OPT_OSDP_STATIC) && defined(OPT_OSDP_EXCLUSIVE_ROLE)
+/* One shared instance overlaying the CP and PD static pools; the accessors
+ * in osdp_common.h carve role-specific pointers out of it. Defined once here so
+ * the osdp_cp.c and osdp_pd.c translation units reference the same storage. */
+union osdp_role_arena g_osdp_role_arena;
+#endif
 
 #ifdef OPT_OSDP_LOG_MINIMAL
 #define OSDP_MIN_LOG_BUF_LEN 160
@@ -132,11 +141,22 @@ uint16_t osdp_compute_crc16(const uint8_t *buf, size_t len)
 {
 	return crc16_itu_t(0x1D0F, buf, len);
 }
+OSDP_TEST_ALIAS(osdp_compute_crc16);
 
+/*
+ * millis_now() is real on every platform utils can identify (Arduino maps it
+ * to micros(), Zephyr to k_uptime_get()). On a target it cannot identify it
+ * bottoms out in a gettimeofday() stub that always reports zero, which would
+ * freeze every timeout and stall the state machine silently. Leave the symbol
+ * undefined there instead, so an application that forgets to supply a tick
+ * source fails to link rather than hanging at runtime.
+ */
+#ifndef UTILS_UNKNOWN_TARGET
 __weak tick_t osdp_millis_now(void)
 {
 	return millis_now();
 }
+#endif
 
 tick_t osdp_millis_since(tick_t last)
 {
@@ -211,6 +231,7 @@ const char *osdp_reply_name(int reply_id)
 		[REPLY_MFGREP    - REPLY_ACK] = "MFGREP",
 		[REPLY_BUSY      - REPLY_ACK] = "BUSY",
 		[REPLY_PIVDATAR  - REPLY_ACK] = "PIVDATAR",
+		[REPLY_GENAUTHR  - REPLY_ACK] = "GENAUTHR",
 		[REPLY_CRAUTHR   - REPLY_ACK] = "CRAUTHR",
 		[REPLY_MFGSTATR  - REPLY_ACK] = "MFGSTATR",
 		[REPLY_MFGERRR   - REPLY_ACK] = "MFGERRR",
@@ -225,6 +246,40 @@ const char *osdp_reply_name(int reply_id)
 		return "UNKNOWN";
 	}
 	return name;
+}
+
+int osdp_cmd_reader_no(const struct osdp_cmd *cmd)
+{
+	switch (cmd->id) {
+	case OSDP_CMD_LED:
+		return cmd->led.reader;
+	case OSDP_CMD_BUZZER:
+		return cmd->buzzer.reader;
+	case OSDP_CMD_TEXT:
+		return cmd->text.reader;
+	case OSDP_CMD_BIOREAD:
+		return cmd->bioread.reader;
+	case OSDP_CMD_BIOMATCH:
+		return cmd->biomatch.reader;
+	default:
+		return -1;
+	}
+}
+
+int osdp_event_reader_no(const struct osdp_event *event)
+{
+	switch (event->type) {
+	case OSDP_EVENT_CARDREAD:
+		return event->cardread.reader_no;
+	case OSDP_EVENT_KEYPRESS:
+		return event->keypress.reader_no;
+	case OSDP_EVENT_BIOREADR:
+		return event->bioreadr.reader;
+	case OSDP_EVENT_BIOMATCHR:
+		return event->biomatchr.reader;
+	default:
+		return -1;
+	}
 }
 
 int osdp_rb_push(struct osdp_rb *p, uint8_t data)
@@ -390,4 +445,48 @@ void osdp_get_status_mask(const osdp_t *ctx, uint8_t *bitmask)
 			*mask |= 1 << pos;
 		}
 	}
+}
+
+void osdp_mp_pd_notify(void *arg, enum osdp_mp_phase phase,
+		       const struct osdp_mp_progress *p)
+{
+	static const enum osdp_notification_type ph2t[] = {
+		[OSDP_MP_PHASE_START]    = OSDP_NOTIFICATION_MP_START,
+		[OSDP_MP_PHASE_PROGRESS] = OSDP_NOTIFICATION_MP_PROGRESS,
+		[OSDP_MP_PHASE_DONE]     = OSDP_NOTIFICATION_MP_DONE,
+	};
+	struct osdp_pd *pd = arg;
+	struct osdp_notification notif;
+
+	if (!is_notifications_enabled(pd)) {
+		return;
+	}
+	notif.type = ph2t[phase];
+	notif.mp.mp_type = (enum osdp_mp_msg_type)p->msg_type;
+	notif.mp.object_id = p->object_id;
+	notif.mp.total = p->total;
+	notif.mp.offset = p->offset;
+	notif.mp.outcome = p->outcome;
+
+	if (is_cp_mode(pd)) {
+		struct osdp *ctx = pd_to_osdp(pd);
+		struct osdp_event evt;
+
+		if (!ctx->event_callback) {
+			return;
+		}
+		evt.type = OSDP_EVENT_NOTIFICATION;
+		evt.notif = notif;
+		ctx->event_callback(ctx->event_callback_arg, pd->idx, &evt);
+	} else {
+		struct osdp_cmd cmd;
+
+		if (!pd->command_callback) {
+			return;
+		}
+		cmd.id = OSDP_CMD_NOTIFICATION;
+		cmd.notif = notif;
+		(void)pd->command_callback(pd->command_callback_arg, &cmd);
+	}
+	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
 }

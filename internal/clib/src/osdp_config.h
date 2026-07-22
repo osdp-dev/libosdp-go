@@ -13,8 +13,8 @@
  */
 #define PROJECT_VERSION                "3.2.0"
 #define PROJECT_NAME                   "libosdp"
-#define GIT_BRANCH                     "master"
-#define GIT_REV                        "v3.2.0-119-g45d03d8"
+#define GIT_BRANCH                     "HEAD"
+#define GIT_REV                        "v3.2.0-241-g7d10f58"
 #define GIT_TAG                        "v3.2.0"
 #define GIT_DIFF                       ""
 #define REPO_ROOT                      "/home/sidcha/work/osdp/libosdp-go/libosdp"
@@ -63,6 +63,18 @@
 
 #ifndef OSDP_FILE_ERROR_RETRY_MAX
 #define OSDP_FILE_ERROR_RETRY_MAX               (10)
+#endif
+
+/* A smartcard/PIV multi-part operation that makes no forward progress for
+ * this long is aborted (covers a PD app that never supplies its reply). */
+#ifndef OSDP_PIV_OP_TIMEOUT_MS
+#define OSDP_PIV_OP_TIMEOUT_MS                  (10 * 1000)
+#endif
+
+/* A multi-part biometric read reply that makes no forward progress for this
+ * long is aborted (covers a PD app that never supplies its template). */
+#ifndef OSDP_BIO_OP_TIMEOUT_MS
+#define OSDP_BIO_OP_TIMEOUT_MS                  (10 * 1000)
 #endif
 
 #ifndef OSDP_PD_MAX

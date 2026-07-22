@@ -12,36 +12,85 @@
 
 #include <utils/utils.h>
 
+#ifdef ARDUINO
+#include <Arduino.h>
+#if defined(ARDUINO_ARCH_ESP32)
+#include <esp_random.h>
+#endif
+#endif
+
+/*
+ * _Static_assert is C11. Pre-C11 compilers reject it at file scope (notably
+ * MSVC's default C mode, which Python's setuptools uses to build the wheel).
+ * Gate the self-test on C11; the IS_ENABLED() macro itself needs only a
+ * standard preprocessor, so skipping the assert loses nothing on those builds.
+ */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 #define _IS_ENABLED_SELFTEST_ON 1
 _Static_assert(IS_ENABLED(_IS_ENABLED_SELFTEST_ON) == 1,
 	       "IS_ENABLED(): defined-as-1 flag must evaluate to 1");
 _Static_assert(IS_ENABLED(_IS_ENABLED_SELFTEST_OFF) == 0,
 	       "IS_ENABLED(): undefined flag must evaluate to 0");
 #undef _IS_ENABLED_SELFTEST_ON
+#endif
+
+/*
+ * Deliberately not defined on an unknown bare-metal target: there is no clock,
+ * no peripheral and no libc entropy we can portably reach for, and any built-in
+ * default would be a fixed sequence identical on every device and every boot.
+ * Leaving the symbol undefined turns a missing entropy source into a link
+ * error instead. See the strong declaration in utils/utils.h.
+ */
+#ifndef UTILS_UNKNOWN_TARGET
 
 __weak uint32_t rand_u32(void)
 {
-#ifdef __BARE_METAL__
-	/*
-	 * libc's rand() references _impure_ptr, which pulls newlib's
-	 * default FILE table (__sf) and the stdio teardown chain
-	 * (_close_r/_lseek_r/_read_r/_write_r) into the link even when
-	 * nothing else uses stdio. Replace it with a self-contained
-	 * xorshift — same non-cryptographic quality as rand(), zero libc
-	 * dependency.
-	 */
-	static uint32_t s_state = 0x9E3779B9u;
-	uint32_t x = s_state;
+#if defined(ARDUINO)
 
+#if defined(ARDUINO_ARCH_ESP32)
+	/* Hardware TRNG; entropy is real as long as WiFi/BT radio is on. */
+	return esp_random();
+#elif defined(ARDUINO_ARCH_ESP8266)
+	/* Hardware TRNG exposed as a register by the ESP8266 core. */
+	return RANDOM_REG32;
+#else
+	/*
+	 * Cores without a TRNG (AVR, SAMD, ...) have no entropy source we can
+	 * reach. The Arduino core's random()/randomSeed() are declared inside
+	 * Arduino.h's __cplusplus section and are invisible to this C
+	 * translation unit; libc's random()/srandom() are POSIX, which newlib
+	 * hides under -std=c11. So keep the self-contained xorshift and seed
+	 * it from micros() -- C-visible on every core -- so the sequence at
+	 * least differs from one boot to the next rather than being a fixed
+	 * constant.
+	 *
+	 * This is NOT a CSPRNG: the seed is boot timing, which an attacker can
+	 * narrow. Secure Channel deployments on these cores should override
+	 * rand_u32() with a real entropy source.
+	 */
+	static uint32_t s_state;
+	uint32_t x;
+
+	if (s_state == 0) {
+		s_state = (uint32_t)micros();
+		if (s_state == 0) {
+			s_state = 0x9E3779B9u;
+		}
+	}
+	x = s_state;
 	x ^= x << 13;
 	x ^= x >> 17;
 	x ^= x << 5;
 	s_state = x ? x : 1u;
 	return x;
+#endif
+
 #else
 	return (uint32_t)rand();
 #endif
 }
+
+#endif /* !UTILS_UNKNOWN_TARGET */
 
 int randint(int limit)
 {

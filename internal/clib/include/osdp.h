@@ -89,6 +89,19 @@ extern "C" {
 #define OSDP_FLAG_ALLOW_EMPTY_ENCRYPTED_DATA_BLOCK 0x00200000
 
 /**
+ * @brief Allow a biometric read reply (REPLY_BIOREADR) to be split across many
+ * packets so templates larger than one packet can be transferred. When set, a
+ * short first reply (its `length` field carrying the total template size, but
+ * fewer bytes physically present) starts a multi-part transfer whose remaining
+ * fragments are pulled by subsequent poll cycles. This is non-conforming to the
+ * standard, so it must be set independently on both the CP and the PD; when it
+ * is not set, LibOSDP expects the whole template in a single packet.
+ *
+ * @note This is an init-only flag; it applies to both CP and PD roles.
+ */
+#define OSDP_FLAG_BIOREADR_MULTIPART 0x00400000
+
+/**
  * @brief Various PD capability function codes.
  */
 enum osdp_pd_cap_function_code_e {
@@ -237,7 +250,7 @@ struct osdp_pd_cap {
 	/**
 	 * Capability function code. See @ref osdp_pd_cap_function_code_e
 	 */
-	uint8_t function_code;
+	enum osdp_pd_cap_function_code_e function_code;
 	/**
 	 * A function_code dependent number that indicates what the PD can do
 	 * with this capability.
@@ -392,7 +405,7 @@ typedef struct {
 	/**
 	 * Can be one of 9600/19200/38400/57600/115200/230400
 	 */
-	int baud_rate;
+	uint32_t baud_rate;
 	/**
 	 * 7 bit PD address. the rest of the bits are ignored. The special
 	 * address 0x7F is used for broadcast. So there can be 2^7-1 devices on
@@ -403,7 +416,7 @@ typedef struct {
 	 * Used to modify the way the context is setup. See `OSDP_FLAG_*`
 	 * macros.
 	 */
-	int flags;
+	uint32_t flags;
 	/**
 	 * Static information that the PD reports to the CP when it received a
 	 * `CMD_ID`. These information must be populated by a PD application.
@@ -411,8 +424,8 @@ typedef struct {
 	struct osdp_pd_id id;
 	/**
 	 * This is a pointer to an array of structures containing the PD'
-	 * capabilities. Use { -1, 0, 0 } to terminate the array. This is used
-	 * only PD mode of operation
+	 * capabilities. Use { OSDP_PD_CAP_SENTINEL, 0, 0 } to terminate the
+	 * array. This is used only PD mode of operation
 	 */
 	const struct osdp_pd_cap *cap;
 	/**
@@ -446,28 +459,40 @@ enum osdp_status_report_type {
 	/**
 	 * @brief Local tamper and power status report
 	 *
-	 * Bit-0: tamper
-	 * Bit-1: power
+	 * Always two entries, one byte each: report[0] is tamper, report[1] is
+	 * power.
 	 */
 	OSDP_STATUS_REPORT_LOCAL,
 	/**
-	 * @brief Remote tamper and power status report
+	 * @brief Reader tamper status report
 	 *
-	 * Bit-0: tamper
-	 * Bit-1: power
+	 * One byte per attached reader (see OSDP_PD_CAP_READERS); report[i] is
+	 * the status of reader i: 0 = normal, 1 = not connected, 2 = tamper.
 	 */
-	OSDP_STATUS_REPORT_REMOTE,
+	OSDP_STATUS_REPORT_READER,
 };
 
+/**
+ * @brief Maximum number of status entries an osdp_status_report can carry;
+ * i.e., the size of its report[] array. Each entry is one status byte, one per
+ * tracked entity (input, output, tamper/power, or reader).
+ */
+#ifndef OSDP_STATUS_REPORT_MAX_LEN
 #define OSDP_STATUS_REPORT_MAX_LEN 64
+#endif
 
 /**
  * @brief Status report structure. Used by OSDP_CMD_STATUS and
  * OSDP_EVENT_STATUS. In case of command, it is used to send a query to the PD
  * while in the case of events, the PD responds back with this structure.
  *
- * This can is used by the PD to indicate various status change reports. Upto a
- * maximum of 32 statuses can be reported using this API.
+ * The report carries one byte per tracked entity and must be full (no partial
+ * reports), so nr_entries must exactly match what the PD supports for the given
+ * status type: the advertised capability count for input
+ * (OSDP_PD_CAP_CONTACT_STATUS_MONITORING), output (OSDP_PD_CAP_OUTPUT_CONTROL),
+ * and reader (OSDP_PD_CAP_READERS) status; and exactly two (tamper, power) for
+ * local status. A status event whose entry count does not match is rejected by
+ * osdp_pd_submit_event().
  */
 struct osdp_status_report {
 	/**
@@ -475,11 +500,11 @@ struct osdp_status_report {
 	 */
 	enum osdp_status_report_type type;
 	/**
-	 * Number of valid bits in `status`
+	 * Number of valid entries in `report`
 	 */
 	int nr_entries;
 	/**
-	 * Status report
+	 * Status report; one byte per entry
 	 */
 	uint8_t report[OSDP_STATUS_REPORT_MAX_LEN];
 };
@@ -488,9 +513,263 @@ struct osdp_status_report {
 /*         OSDP Commands           */
 /* ------------------------------- */
 
+/**
+ * @brief Max text, in bytes, that a text command can carry to a PD's display.
+ */
+#ifndef OSDP_CMD_TEXT_MAX_LEN
 #define OSDP_CMD_TEXT_MAX_LEN          32
+#endif
+
+/**
+ * @brief Max key length, in bytes, that a keyset command can carry. Not
+ * overridable: it must stay large enough to hold the 16-byte SCBK that secure
+ * channel is built on.
+ */
 #define OSDP_CMD_KEYSET_KEY_MAX_LEN    32
+
+/**
+ * @brief Max vendor defined data, in bytes, that a manufacturer specific
+ * command can carry.
+ */
+#ifndef OSDP_CMD_MFG_MAX_DATALEN
 #define OSDP_CMD_MFG_MAX_DATALEN       64
+#endif
+
+/**
+ * @brief Max biometric template that fits in a single OSDP packet.
+ *
+ * @note The OSDP spec allows biometric templates to be split across multiple
+ * packets (see "Multi-Part Messages"); LibOSDP does not implement multi-part
+ * messages, so a template must fit within one packet.
+ */
+#ifndef OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN
+#define OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN 128
+#endif
+
+/**
+ * @brief Biometric type; the body part to scan. See OSDP spec Table 24.
+ */
+enum osdp_biometric_type_e {
+	OSDP_BIO_TYPE_NOT_SPECIFIED,             /**< 0x00 Default */
+	OSDP_BIO_TYPE_RIGHT_THUMB_PRINT,         /**< 0x01 */
+	OSDP_BIO_TYPE_RIGHT_INDEX_FINGER_PRINT,  /**< 0x02 */
+	OSDP_BIO_TYPE_RIGHT_MIDDLE_FINGER_PRINT, /**< 0x03 */
+	OSDP_BIO_TYPE_RIGHT_RING_FINGER_PRINT,   /**< 0x04 */
+	OSDP_BIO_TYPE_RIGHT_LITTLE_FINGER_PRINT, /**< 0x05 */
+	OSDP_BIO_TYPE_LEFT_THUMB_PRINT,          /**< 0x06 */
+	OSDP_BIO_TYPE_LEFT_INDEX_FINGER_PRINT,   /**< 0x07 */
+	OSDP_BIO_TYPE_LEFT_MIDDLE_FINGER_PRINT,  /**< 0x08 */
+	OSDP_BIO_TYPE_LEFT_RING_FINGER_PRINT,    /**< 0x09 */
+	OSDP_BIO_TYPE_LEFT_LITTLE_FINGER_PRINT,  /**< 0x0A */
+	OSDP_BIO_TYPE_RIGHT_IRIS_SCAN,           /**< 0x0B */
+	OSDP_BIO_TYPE_RIGHT_RETINA_SCAN,         /**< 0x0C */
+	OSDP_BIO_TYPE_LEFT_IRIS_SCAN,            /**< 0x0D */
+	OSDP_BIO_TYPE_LEFT_RETINA_SCAN,          /**< 0x0E */
+	OSDP_BIO_TYPE_FULL_FACE_IMAGE,           /**< 0x0F */
+	OSDP_BIO_TYPE_RIGHT_HAND_GEOMETRY,       /**< 0x10 */
+	OSDP_BIO_TYPE_LEFT_HAND_GEOMETRY,        /**< 0x11 */
+	OSDP_BIO_TYPE_SENTINEL                   /**< Max biometric type value */
+};
+
+/**
+ * @brief Biometric data format. See OSDP spec Table 25.
+ */
+enum osdp_biometric_format_e {
+	/**
+	 * 0x00 Not specified; the PD scans using its default method and
+	 * reports the format it used.
+	 */
+	OSDP_BIO_FMT_NOT_SPECIFIED,
+	/**
+	 * 0x01 Raw fingerprint data as a PGM
+	 */
+	OSDP_BIO_FMT_RAW_PGM,
+	/**
+	 * 0x02 ANSI/INCITS 378 fingerprint template
+	 */
+	OSDP_BIO_FMT_ANSI_INCITS_378,
+	/**
+	 * Max biometric format value
+	 */
+	OSDP_BIO_FMT_SENTINEL
+};
+
+/**
+ * @brief Outcome of a biometric scan, as reported by the PD.
+ */
+enum osdp_biometric_status_e {
+	OSDP_BIO_STATUS_SUCCESS = 0x00,      /**< Rest of the fields are valid */
+	OSDP_BIO_STATUS_TIMEOUT = 0x01,      /**< The scan timed out */
+	OSDP_BIO_STATUS_UNKNOWN_ERROR = 0xFF /**< Unknown error */
+};
+
+/**
+ * @brief Command sent from CP to instruct the PD to perform a biometric scan
+ * and return the scan data in an `OSDP_EVENT_BIOREADR` event.
+ */
+struct osdp_cmd_bioread {
+	/**
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
+	 */
+	uint8_t reader;
+	/**
+	 * Body part to scan. See @ref osdp_biometric_type_e
+	 */
+	enum osdp_biometric_type_e type;
+	/**
+	 * Format of the data to be returned. See @ref osdp_biometric_format_e
+	 */
+	enum osdp_biometric_format_e format;
+	/**
+	 * Normalised scan quality
+	 */
+	uint8_t quality;
+};
+
+/**
+ * @brief Command sent from CP to instruct the PD to perform a biometric scan
+ * and match it against @a data, returning the result in an
+ * `OSDP_EVENT_BIOMATCHR` event.
+ */
+struct osdp_cmd_biomatch {
+	/**
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
+	 */
+	uint8_t reader;
+	/**
+	 * Body part to scan. See @ref osdp_biometric_type_e
+	 */
+	enum osdp_biometric_type_e type;
+	/**
+	 * Format of the attached template. See @ref osdp_biometric_format_e
+	 */
+	enum osdp_biometric_format_e format;
+	/**
+	 * Normalised threshold required for accepting the match
+	 */
+	uint8_t quality;
+	/**
+	 * Length of the template in @a data
+	 */
+	uint16_t length;
+	/**
+	 * Template to match the scan against
+	 */
+	uint8_t data[OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN];
+};
+
+/**
+ * @brief Set the PD's local time and date (osdp_TDSET). This command is
+ * obsolete in current editions of the OSDP specification; LibOSDP supports
+ * it for interop with legacy devices. The PD is expected to have declared
+ * the @ref OSDP_PD_CAP_TIME_KEEPING capability to accept this command.
+ */
+struct osdp_cmd_tdset {
+	/**
+	 * Full year in local time; eg., 2026
+	 */
+	uint16_t year;
+	/**
+	 * Month of year; 1 - 12
+	 */
+	uint8_t month;
+	/**
+	 * Day of month; 1 - 31
+	 */
+	uint8_t day;
+	/**
+	 * Hours since midnight; 0 - 23
+	 */
+	uint8_t hour;
+	/**
+	 * Minutes past the hour; 0 - 59
+	 */
+	uint8_t minute;
+	/**
+	 * Seconds past the minute; 0 - 59
+	 */
+	uint8_t second;
+};
+
+/**
+ * @brief Max PIV/auth payload, in bytes, that the smartcard command/event
+ * structures (and the multipart reassembly context behind them) can carry.
+ * These payloads travel as OSDP multi-part messages so they may span many
+ * packets on the wire; this bound is on the reassembled whole.
+ */
+#ifndef OSDP_PIV_DATA_MAX_LEN
+#define OSDP_PIV_DATA_MAX_LEN 256
+#endif
+
+/**
+ * @brief Command sent from CP to retrieve the contents of a PIV object from
+ * a smartcard attached to the PD (osdp_PIVDATA). The PD returns the data in
+ * an `OSDP_EVENT_PIVDATAR` event, reassembled from the multi-part reply.
+ */
+struct osdp_cmd_pivdata {
+	/**
+	 * PIV Object ID per NIST SP 800-73-4 Part 1
+	 */
+	uint8_t oid[3];
+	/**
+	 * PIV element ID within the object
+	 */
+	uint8_t element;
+	/**
+	 * Offset within the requested element
+	 */
+	uint8_t offset;
+};
+
+/**
+ * @brief Command sent from CP to have the PD direct a cryptographic
+ * challenge to its smartcard (osdp_GENAUTH / osdp_CRAUTH). The challenge is
+ * carried as an OSDP multi-part message; the PD returns the response in an
+ * `OSDP_EVENT_GENAUTHR` (resp. `OSDP_EVENT_CRAUTHR`) event.
+ */
+struct osdp_cmd_auth {
+	/**
+	 * Selected algorithm per ISO 7816-4:2005 7.5.5. On the wire this is
+	 * carried in the first fragment only.
+	 */
+	uint8_t algorithm;
+	/**
+	 * Key reference; see @a algorithm. First fragment only on the wire.
+	 */
+	uint8_t key;
+	/**
+	 * Challenge length in @a data; must be non-zero
+	 */
+	uint16_t length;
+	/**
+	 * Cryptographic challenge payload
+	 */
+	uint8_t data[OSDP_PIV_DATA_MAX_LEN];
+};
+
+/**
+ * @brief What an output command does to the output line.
+ */
+enum osdp_cmd_output_control_code_e {
+	/** Do not alter this output */
+	OSDP_CMD_OUTPUT_CC_NOP,
+	/** Set the permanent state to OFF, abort timed operation (if any) */
+	OSDP_CMD_OUTPUT_CC_PERMANENT_OFF,
+	/** Set the permanent state to ON, abort timed operation (if any) */
+	OSDP_CMD_OUTPUT_CC_PERMANENT_ON,
+	/** Set the permanent state to OFF, allow timed operation to complete */
+	OSDP_CMD_OUTPUT_CC_PERMANENT_OFF_ALLOW_TIMED,
+	/** Set the permanent state to ON, allow timed operation to complete */
+	OSDP_CMD_OUTPUT_CC_PERMANENT_ON_ALLOW_TIMED,
+	/** Set the temporary state to ON, resume perm state on timeout */
+	OSDP_CMD_OUTPUT_CC_TEMPORARY_ON,
+	/** Set the temporary state to OFF, resume perm state on timeout */
+	OSDP_CMD_OUTPUT_CC_TEMPORARY_OFF,
+	/** Max value */
+	OSDP_CMD_OUTPUT_CC_SENTINEL
+};
 
 /**
  * @brief Command sent from CP to Control digital output of PD.
@@ -501,16 +780,9 @@ struct osdp_cmd_output {
 	 */
 	uint8_t output_no;
 	/**
-	 * One of the following:
-	 *    0 - NOP – do not alter this output
-	 *    1 - set the permanent state to OFF, abort timed operation (if any)
-	 *    2 - set the permanent state to ON, abort timed operation (if any)
-	 *    3 - set the permanent state to OFF, allow timed operation to complete
-	 *    4 - set the permanent state to ON, allow timed operation to complete
-	 *    5 - set the temporary state to ON, resume perm state on timeout
-	 *    6 - set the temporary state to OFF, resume permanent state on timeout
+	 * What to do to the output line.
 	 */
-	uint8_t control_code;
+	enum osdp_cmd_output_control_code_e control_code;
 	/**
 	 * Time in units of 100 ms
 	 */
@@ -534,20 +806,44 @@ enum osdp_led_color_e {
 };
 
 /**
+ * @brief What the temporary block of an LED command does.
+ */
+enum osdp_cmd_led_temporary_control_code_e {
+	/** Do not alter this LED's temporary settings */
+	OSDP_CMD_LED_TEMPORARY_CC_NOP,
+	/**
+	 * Cancel any temporary operation and display this LED's permanent
+	 * state immediately
+	 */
+	OSDP_CMD_LED_TEMPORARY_CC_CANCEL,
+	/** Set the temporary state as given and start timer immediately */
+	OSDP_CMD_LED_TEMPORARY_CC_SET,
+	/** Max value */
+	OSDP_CMD_LED_TEMPORARY_CC_SENTINEL
+};
+
+/**
+ * @brief What the permanent block of an LED command does.
+ */
+enum osdp_cmd_led_permanent_control_code_e {
+	/** Do not alter this LED's permanent settings */
+	OSDP_CMD_LED_PERMANENT_CC_NOP,
+	/** Set the permanent state as given */
+	OSDP_CMD_LED_PERMANENT_CC_SET,
+	/** Max value */
+	OSDP_CMD_LED_PERMANENT_CC_SENTINEL
+};
+
+/**
  * @brief LED params sub-structure. Part of LED command. See @ref osdp_cmd_led.
  */
 struct osdp_cmd_led_params {
 	/** Control code.
 	 *
-	 * Temporary Control Code:
-	 * - 0 - NOP - do not alter this LED's temporary settings.
-	 * - 1 - Cancel any temporary operation and display this LED's
-	 *       permanent state immediately.
-	 * - 2 - Set the temporary state as given and start timer immediately.
-	 *
-	 * Permanent Control Code:
-	 * - 0 - NOP - do not alter this LED's permanent settings.
-	 * - 1 - Set the permanent state as given.
+	 * The block this struct is used as decides which enumeration applies:
+	 * @ref osdp_cmd_led_temporary_control_code_e for osdp_cmd_led::temporary,
+	 * @ref osdp_cmd_led_permanent_control_code_e for osdp_cmd_led::permanent.
+	 * They do not agree numerically, so the two cannot share a type.
 	 */
 	uint8_t control_code;
 	/**
@@ -561,11 +857,11 @@ struct osdp_cmd_led_params {
 	/**
 	 * Color to set during the ON timer (see @ref osdp_led_color_e).
 	 */
-	uint8_t on_color;
+	enum osdp_led_color_e on_color;
 	/**
 	 * Color to set during the OFF timer (see @ref osdp_led_color_e).
 	 */
-	uint8_t off_color;
+	enum osdp_led_color_e off_color;
 	/**
 	 * Time in units of 100 ms (only for temporary mode).
 	 */
@@ -577,7 +873,8 @@ struct osdp_cmd_led_params {
  */
 struct osdp_cmd_led {
 	/**
-	 * Reader number. 0 = First Reader, 1 = Second Reader, etc.
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
 	 */
 	uint8_t reader;
 	/**
@@ -595,21 +892,32 @@ struct osdp_cmd_led {
 };
 
 /**
+ * @brief What a buzzer command does.
+ */
+enum osdp_cmd_buzzer_control_code_e {
+	/** No tone */
+	OSDP_CMD_BUZZER_CC_NO_TONE,
+	/** Silence the buzzer */
+	OSDP_CMD_BUZZER_CC_OFF,
+	/** Sound the reader's default tone */
+	OSDP_CMD_BUZZER_CC_DEFAULT_TONE,
+	/** Max value */
+	OSDP_CMD_BUZZER_CC_SENTINEL
+};
+
+/**
  * @brief Sent from CP to control the behaviour of a buzzer in the PD.
  */
 struct osdp_cmd_buzzer {
 	/**
-	 * Reader number. 0 = First Reader, 1 = Second Reader, etc.
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
 	 */
 	uint8_t reader;
 	/**
-	 * Control code.
-	 * - 0 - no tone
-	 * - 1 - off
-	 * - 2 - default tone
-	 * - 3+ - TBD
+	 * What the buzzer should do.
 	 */
-	uint8_t control_code;
+	enum osdp_cmd_buzzer_control_code_e control_code;
 	/**
 	 * The ON duration of the sound, in units of 100 ms.
 	 */
@@ -625,21 +933,37 @@ struct osdp_cmd_buzzer {
 };
 
 /**
+ * @brief How a text command displays its message.
+ *
+ * @note Unlike the other control codes, these are 1-indexed; zero is not a
+ * valid value.
+ */
+enum osdp_cmd_text_control_code_e {
+	/** Permanent text, no wrap */
+	OSDP_CMD_TEXT_CC_PERMANENT_NO_WRAP = 1,
+	/** Permanent text, with wrap */
+	OSDP_CMD_TEXT_CC_PERMANENT_WRAP,
+	/** Temporary text, no wrap; reverts after osdp_cmd_text::temp_time */
+	OSDP_CMD_TEXT_CC_TEMPORARY_NO_WRAP,
+	/** Temporary text, with wrap; reverts after osdp_cmd_text::temp_time */
+	OSDP_CMD_TEXT_CC_TEMPORARY_WRAP,
+	/** Max value */
+	OSDP_CMD_TEXT_CC_SENTINEL
+};
+
+/**
  * @brief Command to manipulate any display units that the PD supports.
  */
 struct osdp_cmd_text {
 	/**
-	 * Reader number. 0 = First Reader, 1 = Second Reader, etc.
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
 	 */
 	uint8_t reader;
 	/**
-	 * Control code.
-	 * - 1 - permanent text, no wrap
-	 * - 2 - permanent text, with wrap
-	 * - 3 - temp text, no wrap
-	 * - 4 - temp text, with wrap
+	 * How the message should be displayed.
 	 */
-	uint8_t control_code;
+	enum osdp_cmd_text_control_code_e control_code;
 	/**
 	 * Duration to display temporary text, in seconds
 	 */
@@ -751,48 +1075,45 @@ struct osdp_cmd_file_tx {
  */
 enum osdp_notification_type {
 	/**
-	 * Application command outcome report.
-	 *
-	 * arg0: The command ID
-	 * arg1: outcome -- 0: success; -1: failure;
+	 * Application command outcome report. Payload: `command`
+	 * (@ref osdp_notification_command).
 	 */
 	OSDP_NOTIFICATION_COMMAND,
 	/**
-	 * Secure Channel state change.
+	 * Secure Channel state change. Payload: `sc_status`
+	 * (@ref osdp_notification_sc_status).
 	 *
 	 * Fires on both CP and PD. In CP mode it reports the state of the
 	 * SC session with the addressed PD; in PD mode it reports the state
 	 * of the SC session with the CP.
-	 *
-	 * arg0: status -- 0: inactive; 1: active
-	 * arg1: scbk type -- 0: scbk; 1: scbk-d
 	 */
 	OSDP_NOTIFICATION_SC_STATUS,
 	/**
-	 * Peer link state change.
+	 * Peer link state change. Payload: `pd_status`
+	 * (@ref osdp_notification_pd_status).
 	 *
 	 * In CP mode: the addressed PD has gone online or offline.
 	 * In PD mode: the CP has become reachable (inbound traffic
 	 * observed) or unreachable (no CP activity for
 	 * OSDP_PD_ONLINE_TOUT_MS).
-	 *
-	 * arg0: status -- 0: offline; 1: online
 	 */
 	OSDP_NOTIFICATION_PD_STATUS,
 	/**
-	 * File transfer terminated (CP only).
-	 *
-	 * arg0: file ID that was being transferred
-	 * arg1: outcome -- see enum osdp_file_tx_outcome
-	 *
-	 * Fires exactly once per transfer, on any terminal state (success,
-	 * local abort, or a negative status reported by the PD).
+	 * Multipart transfer opened. `mp` carries mp_type/object_id/total.
 	 */
-	OSDP_NOTIFICATION_FILE_TX_DONE,
+	OSDP_NOTIFICATION_MP_START,
+	/**
+	 * Multipart fragment committed. `mp.offset`/`mp.total` advance.
+	 */
+	OSDP_NOTIFICATION_MP_PROGRESS,
+	/**
+	 * Multipart transfer terminated. `mp.outcome` is set.
+	 */
+	OSDP_NOTIFICATION_MP_DONE,
 };
 
 /**
- * @brief Outcome reported by OSDP_NOTIFICATION_FILE_TX_DONE
+ * @brief Outcome reported by OSDP_NOTIFICATION_MP_DONE
  */
 enum osdp_file_tx_outcome {
 	OSDP_FILE_TX_OUTCOME_OK = 0,           /**< Contents processed by PD */
@@ -803,17 +1124,25 @@ enum osdp_file_tx_outcome {
 };
 
 /**
- * @brief LibOSDP notification payload.
- *
- * Carries a libosdp-synthesized notification to the application. The same
- * struct is used in both event (CP) and command (PD) delivery paths. See
- * @ref osdp_notification_type for the per-type meaning of @a arg0 and
- * @a arg1.
+ * @brief Which multipart message family a transfer belongs to.
  */
-struct osdp_notification {
-	enum osdp_notification_type type;  /**< Notification type */
-	int arg0;                          /**< Additional data member */
-	int arg1;                          /**< Additional data member */
+enum osdp_mp_msg_type {
+	OSDP_MP_MSG_FILE_TRANSFER = 1, /**< File transfer */
+	OSDP_MP_MSG_PIV,               /**< PIV data (reserved) */
+	OSDP_MP_MSG_GENAUTH,           /**< General auth (reserved) */
+	OSDP_MP_MSG_CRAUTH,            /**< Challenge/response auth (reserved) */
+	OSDP_MP_MSG_BIOREAD,           /**< Biometric read reply */
+};
+
+/**
+ * @brief Structured payload for OSDP_NOTIFICATION_MP_* notifications.
+ */
+struct osdp_mp_notification {
+	enum osdp_mp_msg_type mp_type; /**< Multipart family */
+	int object_id;                 /**< File id for file transfer; 0 reserved */
+	uint32_t total;                /**< Full payload length */
+	uint32_t offset;                /**< Bytes transferred so far */
+	int outcome;                   /**< Meaningful at MP_DONE */
 };
 
 /**
@@ -831,7 +1160,54 @@ enum osdp_cmd_e {
 	OSDP_CMD_STATUS,      /**< Status report command */
 	OSDP_CMD_COMSET_DONE, /**< Comset completed; Alias for OSDP_CMD_COMSET */
 	OSDP_CMD_NOTIFICATION,/**< LibOSDP notification (PD mode, synthesized) */
+	OSDP_CMD_BIOREAD,     /**< Scan and send biometric data command */
+	OSDP_CMD_BIOMATCH,    /**< Scan and match biometric template command */
+	OSDP_CMD_TDSET,       /**< Time and date set command */
+	OSDP_CMD_PIVDATA,     /**< Retrieve PIV object data command */
+	OSDP_CMD_GENAUTH,     /**< General authenticate command */
+	OSDP_CMD_CRAUTH,      /**< Challenge/response authenticate command */
 	OSDP_CMD_SENTINEL     /**< Max command value */
+};
+
+/**
+ * @brief Payload for OSDP_NOTIFICATION_COMMAND.
+ */
+struct osdp_notification_command {
+	enum osdp_cmd_e command; /**< Which application command completed */
+	bool success;            /**< true: succeeded; false: failed */
+};
+
+/**
+ * @brief Payload for OSDP_NOTIFICATION_SC_STATUS.
+ */
+struct osdp_notification_sc_status {
+	bool active;   /**< Secure channel session is up */
+	bool scbk_d;   /**< true: SCBK-D (install key); false: SCBK */
+};
+
+/**
+ * @brief Payload for OSDP_NOTIFICATION_PD_STATUS.
+ */
+struct osdp_notification_pd_status {
+	bool online;   /**< Peer link is online/reachable */
+};
+
+/**
+ * @brief LibOSDP notification payload.
+ *
+ * Carries a libosdp-synthesized notification to the application. The same
+ * struct is used in both event (CP) and command (PD) delivery paths. The
+ * @a type discriminator selects which union member is valid; see
+ * @ref osdp_notification_type.
+ */
+struct osdp_notification {
+	enum osdp_notification_type type;  /**< Notification type */
+	union {
+		struct osdp_notification_command command;     /**< COMMAND */
+		struct osdp_notification_sc_status sc_status; /**< SC_STATUS */
+		struct osdp_notification_pd_status pd_status; /**< PD_STATUS */
+		struct osdp_mp_notification mp;               /**< MP_* */
+	};
 };
 
 /**
@@ -875,6 +1251,11 @@ struct osdp_cmd {
 		struct osdp_cmd_file_tx file_tx;  /**< File transfer command structure */
 		struct osdp_status_report status; /**< Status report command structure */
 		struct osdp_notification notif;   /**< LibOSDP notification (PD mode) */
+		struct osdp_cmd_bioread bioread;  /**< Biometric read command structure */
+		struct osdp_cmd_biomatch biomatch; /**< Biometric match command structure */
+		struct osdp_cmd_tdset tdset;      /**< Time and date set command structure */
+		struct osdp_cmd_pivdata pivdata;  /**< PIV data retrieval command structure */
+		struct osdp_cmd_auth auth;        /**< GENAUTH/CRAUTH command structure */
 	};
 };
 
@@ -882,9 +1263,50 @@ struct osdp_cmd {
 /*          OSDP Events            */
 /* ------------------------------- */
 
+/**
+ * @brief Max card data, in bytes, that a card read event can carry. Note that
+ * the event's length field is in bits or bytes depending on the card format,
+ * but this bound is always in bytes.
+ */
+#ifndef OSDP_EVENT_CARDREAD_MAX_DATALEN
 #define OSDP_EVENT_CARDREAD_MAX_DATALEN   64
+#endif
+
+/**
+ * @brief Max keypress data, in bytes, that a keypad event can carry. One byte
+ * per key, so this bounds the number of keys a PD can report in one event.
+ */
+#ifndef OSDP_EVENT_KEYPRESS_MAX_DATALEN
 #define OSDP_EVENT_KEYPRESS_MAX_DATALEN   64
+#endif
+
+/**
+ * @brief Max vendor defined data, in bytes, that a manufacturer specific
+ * reply can carry.
+ */
+#ifndef OSDP_EVENT_MFGREP_MAX_DATALEN
 #define OSDP_EVENT_MFGREP_MAX_DATALEN     128
+#endif
+
+/**
+ * @brief Max vendor defined data, in bytes, that a manufacturer specific
+ * status or error reply can carry.
+ */
+#ifndef OSDP_EVENT_MFGSTAT_MAX_DATALEN
+#define OSDP_EVENT_MFGSTAT_MAX_DATALEN    128
+#endif
+
+/**
+ * @brief Max biometric template carried in a BIOREADR reply.
+ *
+ * @note A template up to this size fits in a single packet. Larger templates
+ * (up to this ceiling) can be transferred across multiple packets only when
+ * both roles set @ref OSDP_FLAG_BIOREADR_MULTIPART; without that flag a template
+ * must fit within one packet.
+ */
+#ifndef OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN
+#define OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN 256
+#endif
 
 /**
  * @brief Various card formats that a PD can support. This is sent to CP
@@ -902,7 +1324,8 @@ enum osdp_event_cardread_format_e {
  */
 struct osdp_event_cardread {
 	/**
-	 * Reader number. 0 = First Reader, 1 = Second Reader, etc.
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
 	 */
 	int reader_no;
 	/**
@@ -916,9 +1339,9 @@ struct osdp_event_cardread {
 	 */
 	int direction;
 	/**
-	 * Length of card data in bits
+	 * Length of card data in bits. Carried as a 16-bit value on the wire.
 	 */
-	int length;
+	uint16_t length;
 	/**
 	 * Card data of @a length bytes or bits bits depending on @a format
 	 */
@@ -930,9 +1353,8 @@ struct osdp_event_cardread {
  */
 struct osdp_event_keypress {
 	/**
-	 * Reader number in context of sub-readers attached to current PD; this
-	 * number indicates the number of that reader. This is not supported by
-	 * LibOSDP.
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
 	 */
 	int reader_no;
 	/**
@@ -970,6 +1392,108 @@ struct osdp_event_mfgrep {
 };
 
 /**
+ * @brief OSDP Event Manufacturer Specific Status/Error Reply
+ *
+ * Both replies have the same layout, so this structure backs the `mfgstatr`
+ * member of `OSDP_EVENT_MFGSTATR` and the `mfgerrr` member of
+ * `OSDP_EVENT_MFGERRR`; the event type distinguishes a status condition from
+ * an error condition.
+ *
+ * @note Unlike `osdp_MFGREP`, the OSDP spec (v2.2 sections 7.23 and 7.24)
+ * defines no vendor code for these replies; @a data is entirely vendor
+ * defined. Use the vendor code that the PD reported in `osdp_PDID` to
+ * determine how to interpret it.
+ */
+struct osdp_event_mfgstat {
+	/**
+	 * Length of manufacturer data in bytes
+	 */
+	uint8_t length;
+	/**
+	 * Manufacturer data of `length` bytes
+	 */
+	uint8_t data[OSDP_EVENT_MFGSTAT_MAX_DATALEN];
+};
+
+/**
+ * @brief OSDP Event Scan and Send Biometric Data
+ *
+ * Sent by the PD in response to an `OSDP_CMD_BIOREAD` command.
+ */
+struct osdp_event_bioreadr {
+	/**
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
+	 */
+	uint8_t reader;
+	/**
+	 * Outcome of the scan. See @ref osdp_biometric_status_e. The remaining
+	 * fields are valid only when this is `OSDP_BIO_STATUS_SUCCESS`.
+	 */
+	enum osdp_biometric_status_e status;
+	/**
+	 * Body part that was scanned. See @ref osdp_biometric_type_e
+	 *
+	 * @note The OSDP spec carries no format field in this reply.
+	 */
+	enum osdp_biometric_type_e type;
+	/**
+	 * Scan quality; 0x00 is worst, 0xFF is best
+	 */
+	uint8_t quality;
+	/**
+	 * Length of the template in @a data
+	 */
+	uint16_t length;
+	/**
+	 * The scanned image or template
+	 */
+	uint8_t data[OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN];
+};
+
+/**
+ * @brief OSDP Event Scan and Match Biometric Template
+ *
+ * Sent by the PD in response to an `OSDP_CMD_BIOMATCH` command.
+ */
+struct osdp_event_biomatchr {
+	/**
+	 * Target reader: 0 is this PD, 1 the first attached reader, and so on.
+	 * Must fit within the PD's OSDP_PD_CAP_READERS capability.
+	 */
+	uint8_t reader;
+	/**
+	 * Outcome of the scan. See @ref osdp_biometric_status_e. @a score is
+	 * valid only when this is `OSDP_BIO_STATUS_SUCCESS`.
+	 */
+	enum osdp_biometric_status_e status;
+	/**
+	 * Result of the biometric match; 0x00 is no match, 0xFF is best match
+	 */
+	uint8_t score;
+};
+
+/**
+ * @brief Payload of a smartcard/PIV reply (`OSDP_EVENT_PIVDATAR` /
+ * `OSDP_EVENT_GENAUTHR` / `OSDP_EVENT_CRAUTHR`).
+ *
+ * These replies travel as OSDP multi-part messages. On the CP, the event
+ * carries the fully reassembled payload. On the PD, the application submits
+ * this event (from within the command callback for an inline reply, or later
+ * for delivery on a subsequent poll) and libosdp fragments it on the wire.
+ */
+struct osdp_event_piv_reply {
+	/**
+	 * Number of valid bytes in @a data; must be non-zero
+	 */
+	uint16_t length;
+	/**
+	 * Reassembled reply payload
+	 */
+	uint8_t data[OSDP_PIV_DATA_MAX_LEN];
+};
+
+/**
  * @brief OSDP PD Events
  */
 enum osdp_event_type {
@@ -978,6 +1502,13 @@ enum osdp_event_type {
 	OSDP_EVENT_MFGREP,        /**< Manufacturer specific reply event */
 	OSDP_EVENT_STATUS,        /**< Status event */
 	OSDP_EVENT_NOTIFICATION,  /**< LibOSDP notification event */
+	OSDP_EVENT_MFGSTATR,      /**< Manufacturer specific status reply event */
+	OSDP_EVENT_MFGERRR,       /**< Manufacturer specific error reply event */
+	OSDP_EVENT_BIOREADR,      /**< Scan and send biometric data event */
+	OSDP_EVENT_BIOMATCHR,     /**< Scan and match biometric template event */
+	OSDP_EVENT_PIVDATAR,      /**< PIV data reply event */
+	OSDP_EVENT_GENAUTHR,      /**< General authenticate reply event */
+	OSDP_EVENT_CRAUTHR,       /**< Challenge/response authenticate reply event */
 	OSDP_EVENT_SENTINEL       /**< Max event value */
 };
 
@@ -993,6 +1524,11 @@ struct osdp_event {
 		struct osdp_event_keypress keypress; /**< Keypress event structure */
 		struct osdp_event_cardread cardread; /**< Card read event structure */
 		struct osdp_event_mfgrep mfgrep;     /**< Manufacturer specific response event struture */
+		struct osdp_event_mfgstat mfgstatr;  /**< Manufacturer specific status reply event structure */
+		struct osdp_event_mfgstat mfgerrr;   /**< Manufacturer specific error reply event structure */
+		struct osdp_event_bioreadr bioreadr; /**< Biometric read reply event structure */
+		struct osdp_event_biomatchr biomatchr; /**< Biometric match reply event structure */
+		struct osdp_event_piv_reply piv_reply; /**< Smartcard/PIV reply event structure */
 		struct osdp_status_report status;    /**< Status report event structure */
 		struct osdp_notification notif;      /**< LibOSDP notification (CP mode) */
 	};
@@ -1011,10 +1547,20 @@ struct osdp_event {
  * @retval -ve if LibOSDP must send an `osdp_NAK` response.
  * @retval +ve is reserved.
  *
- * @note For `OSDP_CMD_MFG`, callback return values follow normal ACK/NAK
- * handling (`-ve` => `osdp_NAK`, `0`/`+ve` => `osdp_ACK`). To send
- * manufacturer data back to CP, apps must submit `OSDP_EVENT_MFGREP`
- * asynchronously via `osdp_pd_submit_event()`.
+ * @note To select the NAK code, return the negated code; only the codes an
+ * application can know are honoured:
+ *   - `-OSDP_PD_NAK_BIO_TYPE` - the requested biometric type is not supported
+ *   - `-OSDP_PD_NAK_BIO_FMT` - the requested biometric format is not supported
+ *   - `-OSDP_PD_NAK_RECORD` - the command record could not be processed
+ * Any other -ve value (such as a plain `-1`) sends `OSDP_PD_NAK_RECORD`. The
+ * remaining NAK codes describe protocol faults that only LibOSDP can detect;
+ * returning one of them logs a warning and sends `OSDP_PD_NAK_RECORD`.
+ *
+ * @note For commands whose reply carries application data - `OSDP_CMD_MFG`,
+ * `OSDP_CMD_BIOREAD` and `OSDP_CMD_BIOMATCH` - the app submits the reply as an
+ * event via `osdp_pd_submit_event()`. Submitting it from within this callback
+ * sends it as the reply to the command itself; submitting it later sends it as
+ * a poll response and this command is `osdp_ACK`-ed.
  */
 typedef int (*pd_command_callback_t)(void *arg, struct osdp_cmd *cmd);
 
@@ -1099,7 +1645,7 @@ void osdp_pd_teardown(osdp_t *ctx);
  *
  * @param ctx OSDP context
  * @param cap pointer to array of cap (`struct osdp_pd_cap`) terminated by a
- * capability with cap->function_code set to 0.
+ * capability with cap->function_code set to OSDP_PD_CAP_SENTINEL.
  */
 OSDP_EXPORT
 void osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap);
@@ -1151,6 +1697,18 @@ int osdp_pd_notify_event(osdp_t *ctx, const struct osdp_event *event);
  *
  * @retval 0 on success
  * @retval -1 on failure
+ *
+ * @note An accepted event is queued @b by @b reference; LibOSDP does not copy
+ * it. @a event must stay alive and unmodified from a successful submission until
+ * the library is done with it -- an event that lives on the stack of a function
+ * that returns (a command callback, say), or one reused for a second submission
+ * while the first is still queued, corrupts the queue. Ownership returns to the
+ * application when the event completion callback fires for that pointer (see
+ * osdp_pd_set_event_completion_callback()); every accepted event is reported
+ * exactly once, including those dropped by osdp_pd_flush_events()
+ * (@c OSDP_COMPLETION_FLUSHED) and osdp_pd_teardown() (@c OSDP_COMPLETION_ABORTED).
+ * That callback is where a heap-allocated event should be freed. On a -1 return
+ * the event was never queued and is the application's to reuse at once.
  */
 OSDP_EXPORT
 int osdp_pd_submit_event(osdp_t *ctx, const struct osdp_event *event);
@@ -1249,6 +1807,18 @@ int osdp_cp_send_command(osdp_t *ctx, int pd, const struct osdp_cmd *cmd);
  *
  * @note This method only adds the command on to a particular PD's command
  * queue. The command itself can fail due to various reasons.
+ *
+ * @note An accepted command is queued @b by @b reference; LibOSDP does not copy
+ * it. @a cmd must stay alive and unmodified from a successful submission until
+ * the library is done with it -- a command that lives on the stack of a function
+ * that returns, or one reused for a second submission while the first is still
+ * queued, corrupts the queue. Ownership returns to the application when the
+ * command completion callback fires for that pointer (see
+ * osdp_cp_set_command_completion_callback()); every accepted command is reported
+ * exactly once, including those dropped by osdp_cp_flush_commands()
+ * (@c OSDP_COMPLETION_FLUSHED) and osdp_cp_teardown() (@c OSDP_COMPLETION_ABORTED).
+ * That callback is where a heap-allocated command should be freed. On a -1
+ * return the command was never queued and is the application's to reuse at once.
  */
 OSDP_EXPORT
 int osdp_cp_submit_command(osdp_t *ctx, int pd, const struct osdp_cmd *cmd);
@@ -1508,8 +2078,7 @@ void osdp_get_sc_status_mask(const osdp_t *ctx, uint8_t *bitmask);
 struct osdp_metrics {
 	/**
 	 * Packets transmitted successfully on the wire. Counted once
-	 * per @ref osdp_phy_send_packet() that reached the channel
-	 * driver with the full payload.
+	 * per packet handed to the channel driver with its full payload.
 	 */
 	uint32_t packets_sent;
 	/**
@@ -1571,7 +2140,7 @@ int osdp_get_metrics(osdp_t *ctx, int pd_idx, struct osdp_metrics *out);
  * @retval 0 on success
  * @retval -1 on errors
  */
-typedef int (*osdp_file_open_fn_t)(void *arg, int file_id, int *size);
+typedef int (*osdp_file_open_fn_t)(void *arg, int file_id, uint32_t *size);
 
 /**
  * @brief Read a chunk of file data into buffer
@@ -1590,7 +2159,8 @@ typedef int (*osdp_file_open_fn_t)(void *arg, int file_id, int *size);
  * @note LibOSDP will guarantee that size and offset params are always
  * positive and size is always greater than or equal to offset.
  */
-typedef int (*osdp_file_read_fn_t)(void *arg, void *buf, int size, int offset);
+typedef int (*osdp_file_read_fn_t)(void *arg, void *buf, uint32_t size,
+				   uint32_t offset);
 
 /**
  * @brief Write a chunk of file data from buffer to disk.
@@ -1610,7 +2180,7 @@ typedef int (*osdp_file_read_fn_t)(void *arg, void *buf, int size, int offset);
  * positive and size is always greater than or equal to offset.
  */
 typedef int (*osdp_file_write_fn_t)(void *arg, const void *buf,
-				   int size, int offset);
+				   uint32_t size, uint32_t offset);
 
 /**
  * @brief Close file that corresponds to a given file descriptor
@@ -1667,7 +2237,8 @@ int osdp_file_register_ops(osdp_t *ctx, int pd,
  * @retval 0 on success. -1 on errors.
  */
 OSDP_EXPORT
-int osdp_get_file_tx_status(const osdp_t *ctx, int pd, int *size, int *offset);
+int osdp_get_file_tx_status(const osdp_t *ctx, int pd, uint32_t *size,
+			    uint32_t *offset);
 
 #ifdef __cplusplus
 }

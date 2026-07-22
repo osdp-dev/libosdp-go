@@ -89,8 +89,14 @@ void osdp_phy_release_packet(struct osdp_pd *pd)
 		pd->rx_pkt->max_len = 0;
 	}
 	pd->packet_len = 0;
-	CLEAR_FLAG(pd, PD_FLAG_PKT_HAS_MARK);
-	pd->packet_buf = NULL;
+	/* A staged reply (pd_prebuild_status_reply) re-homes packet_buf to the
+	 * TX staging buffer during command dispatch, before this teardown runs.
+	 * Only reset the RX-side pointer when no such reply is pending, else we
+	 * null the finalized reply out from under pd_send_reply(). */
+	if (!pd->reply_prebuilt) {
+		CLEAR_FLAG(pd, PD_FLAG_PKT_HAS_MARK);
+		pd->packet_buf = NULL;
+	}
 #else /* OPT_OSDP_RX_ZERO_COPY */
 	ARG_UNUSED(pd);
 #endif /* OPT_OSDP_RX_ZERO_COPY */
@@ -425,7 +431,7 @@ static int phy_validate_header(struct osdp_pd *pd, uint8_t *buf,
 		return OSDP_ERR_PKT_FMT;
 	}
 
-	pkt_len = (pkt->len_msb << 8) | pkt->len_lsb;
+	pkt_len = ((uint32_t)pkt->len_msb << 8) | pkt->len_lsb;
 	if (pkt_len > max_len ||
 	    pkt_len < sizeof(struct osdp_packet_header) + 1) {
 		return OSDP_ERR_PKT_FMT;
@@ -489,6 +495,7 @@ static bool phy_rescan_packet_buf(struct osdp_pd *pd)
 static int phy_check_header(struct osdp_pd *pd)
 {
 	int ret, len;
+	unsigned long need;
 	uint8_t cur_byte = 0, prev_byte = 0;
 	uint8_t *buf = pd->packet_buf;
 
@@ -514,10 +521,19 @@ static int phy_check_header(struct osdp_pd *pd)
 		prev_byte = cur_byte;
 	}
 
-	/* Found start of a new packet; wait until we have atleast the header */
-	len = osdp_rb_pop_buf(pd->rx_rb, buf + pd->packet_buf_len,
-			      sizeof(struct osdp_packet_header) - 1);
-	pd->packet_buf_len += len;
+	/*
+	 * Found start of a new packet; top up only the header bytes still
+	 * missing. On re-entry with a partially collected header, popping a
+	 * fixed sizeof(header)-1 bytes would overshoot packet_buf_len past the
+	 * packet and wedge the framer (see osdp_phy_check_packet()).
+	 */
+	need = sizeof(struct osdp_packet_header) +
+	       (buf[0] == OSDP_PKT_MARK ? 1 : 0);
+	if (pd->packet_buf_len < need) {
+		len = osdp_rb_pop_buf(pd->rx_rb, buf + pd->packet_buf_len,
+				      need - pd->packet_buf_len);
+		pd->packet_buf_len += len;
+	}
 
 	/* Validate header using shared function */
 	ret = phy_validate_header(pd, buf, pd->packet_buf_len, OSDP_PACKET_BUF_SIZE);
@@ -558,7 +574,7 @@ static int phy_check_packet(struct osdp_pd *pd, uint8_t *buf, int pkt_len)
 	/* validate CRC/checksum */
 	if (pkt->control & PKT_CONTROL_CRC) {
 		pkt_len -= 2; /* consume CRC */
-		cur = (buf[pkt_len + 1] << 8) | buf[pkt_len];
+		cur = ((uint32_t)buf[pkt_len + 1] << 8) | buf[pkt_len];
 		comp = osdp_compute_crc16(buf, pkt_len);
 		if (comp != cur) {
 			LOG_ERR("Invalid crc 0x%04x/0x%04x", comp, cur);
@@ -647,12 +663,14 @@ static int phy_check_packet(struct osdp_pd *pd, uint8_t *buf, int pkt_len)
 	} else {
 		if (comp == 0) {
 			/**
-			 * Check for receiving a busy reply from the PD which would
-			 * have a sequence number of 0, come in an unsecured packet
-			 * of minimum length, and have the reply ID REPLY_BUSY.
+			 * A busy PD replies REPLY_BUSY with sequence number 0
+			 * in a plain (non-SCB) packet of minimum length, even
+			 * while a secure channel is active (v2.2 section 7.19).
+			 * Surface it as-is; the retry path repeats the command
+			 * with its original sequence number.
 			 */
-			if ((pkt_len == 6) && (pkt->data[0] == REPLY_BUSY)) {
-				pd->seq_number -= 1;
+			if ((pkt_len == 6) && (pkt->data[0] == REPLY_BUSY) &&
+			    !(pkt->control & PKT_CONTROL_SCB)) {
 				return OSDP_ERR_PKT_BUSY;
 			}
 		}
@@ -721,7 +739,8 @@ int osdp_phy_check_packet(struct osdp_pd *pd)
 			}
 			pd->packet_len = ret;
 			if (pd->packet_scan_skip) {
-				LOG_DBG("Packet scan skipped:%u mark:%d",
+				LOG_DBG("Packet scan skipped:%" PRIu32
+					" mark:%d",
 					pd->packet_scan_skip,
 					ISSET_FLAG(pd, PD_FLAG_PKT_HAS_MARK));
 				pd->packet_scan_skip = 0;
@@ -732,6 +751,17 @@ int osdp_phy_check_packet(struct osdp_pd *pd)
 
 #ifndef OPT_OSDP_RX_ZERO_COPY
 	{
+		/*
+		 * Guard the unsigned subtraction below: if we ever hold more
+		 * bytes than the header declared, the wrap-around would ask for
+		 * a huge (negative when cast to int) count and wedge the framer.
+		 * Treat it as a malformed frame so the link resets and recovers.
+		 */
+		if (pd->packet_buf_len > pd->packet_len) {
+			LOG_ERR("Buffered %lu bytes exceeds packet length %lu",
+				pd->packet_buf_len, pd->packet_len);
+			return OSDP_ERR_PKT_FMT;
+		}
 		/* Traditional: collect remaining packet bytes from ring buffer */
 		ret = osdp_rb_pop_buf(pd->rx_rb,
 				      pd->packet_buf + pd->packet_buf_len,
@@ -961,12 +991,7 @@ void osdp_phy_progress_sequence(struct osdp_pd *pd)
 	pd->seq_number = phy_get_next_seq_number(pd);
 }
 
-#ifdef UNIT_TESTING
-int (*test_osdp_phy_packet_finalize)(struct osdp_pd *pd, uint8_t *buf,
-			int len, int max_len) = osdp_phy_finalize_packet;
-
-/* Export packet creation functions through function pointers for testing */
-int (*test_osdp_phy_packet_init)(struct osdp_pd *pd, uint8_t *buf, int max_len) = osdp_phy_packet_init;
-uint16_t (*test_osdp_compute_crc16)(const uint8_t *buf, size_t len) = osdp_compute_crc16;
-uint8_t (*test_osdp_compute_checksum)(uint8_t *msg, int length) = osdp_compute_checksum;
-#endif
+/* Export packet build/verify internals to the unit tests. */
+OSDP_TEST_ALIAS(osdp_phy_finalize_packet);
+OSDP_TEST_ALIAS(osdp_phy_packet_init);
+OSDP_TEST_ALIAS(osdp_compute_checksum);
