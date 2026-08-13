@@ -162,7 +162,7 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 	case EvtMfgReply:
 		var vendorCode C.uint32_t
 		var length C.uint8_t
-		mfgData := make([]C.uint8_t, 64) // OSDP_CMD_MFG_MAX_DATALEN
+		mfgData := make([]C.uint8_t, C.OSDP_EVENT_MFGREP_MAX_DATALEN)
 		C.get_event_mfgrep(cEvent, &vendorCode, &length, &mfgData[0])
 
 		// Convert vendor code to 3-byte array

@@ -7,6 +7,7 @@
 package osdp_test
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 	"time"
@@ -165,4 +166,76 @@ func TestEventGeneration(t *testing.T) {
 	}
 
 	t.Logf("Event generation test completed successfully. Events received: %v", eventsReceived)
+}
+
+// TestMfgReplyLargePayload round-trips an MFGREP event whose payload exceeds the
+// old 64-byte decode buffer (but stays within the 128-byte C max) through a real
+// CP/PD FIFO pair. Before the decode-buffer fix, get_event_mfgrep memcpy'd 100
+// bytes into a 64-byte Go slice, corrupting the heap; the fix sizes the buffer to
+// OSDP_EVENT_MFGREP_MAX_DATALEN so the decoded Data must match exactly.
+func TestMfgReplyLargePayload(t *testing.T) {
+	data := make([]byte, 100) // > old 64-byte buffer, < 128 C max
+	for i := range data {
+		data[i] = byte(i)
+	}
+
+	cpRx, cpTx, pdRx, pdTx, cleanup := createFIFOPair(t)
+	defer cleanup()
+
+	id := osdp.PdId{Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345, FirmwareMajor: 1}
+
+	pdChannel, err := osdp.NewFIFOChannel(pdRx, pdTx)
+	if err != nil {
+		t.Fatalf("PD channel: %v", err)
+	}
+	defer pdChannel.Close()
+
+	pd, err := osdp.NewPeripheralDevice(pdChannel,
+		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id},
+		[]osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}},
+		osdp.LogError)
+	if err != nil {
+		t.Fatalf("NewPeripheralDevice: %v", err)
+	}
+	defer pd.Stop()
+
+	cpChannel, err := osdp.NewFIFOChannel(cpRx, cpTx)
+	if err != nil {
+		t.Fatalf("CP channel: %v", err)
+	}
+	defer cpChannel.Close()
+
+	cp, err := osdp.NewControlPanel(cpChannel,
+		[]*osdp.PdInfo{{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id}},
+		osdp.LogError)
+	if err != nil {
+		t.Fatalf("NewControlPanel: %v", err)
+	}
+	defer cp.Stop()
+
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online within timeout")
+	}
+
+	if err := pd.SubmitEvent(&osdp.Event{Event: osdp.EventMfgReply{
+		VendorCode: [3]uint8{1, 2, 3}, Data: data,
+	}}); err != nil {
+		t.Fatalf("SubmitEvent: %v", err)
+	}
+
+	ev, err := cp.GetEvent(0, 5*time.Second)
+	if err != nil {
+		t.Fatalf("GetEvent: %v", err)
+	}
+
+	mfg, ok := ev.Event.(osdp.EventMfgReply)
+	if !ok {
+		t.Fatalf("decoded event type = %T, want EventMfgReply", ev.Event)
+	}
+	if len(mfg.Data) != len(data) {
+		t.Fatalf("decoded Data length = %d, want %d", len(mfg.Data), len(data))
+	}
+	if !bytes.Equal(mfg.Data, data) {
+		t.Fatalf("decoded Data = %v, want %v", mfg.Data, data)
+	}
 }
