@@ -25,9 +25,9 @@ extern void cpCommandCompletionWrapper(void *arg, int pd, struct osdp_cmd *cmd, 
 extern void pdEventCompletionWrapper(void *arg, struct osdp_event *ev, int status);
 
 // Forward declarations for file transfer callback wrappers
-extern int fileOpenWrapper(void *arg, int file_id, int *size);
-extern int fileReadWrapper(void *arg, void *buf, int size, int offset);
-extern int fileWriteWrapper(void *arg, void *buf, int size, int offset);
+extern int fileOpenWrapper(void *arg, int file_id, uint32_t *size);
+extern int fileReadWrapper(void *arg, void *buf, uint32_t size, uint32_t offset);
+extern int fileWriteWrapper(void *arg, void *buf, uint32_t size, uint32_t offset);
 extern int fileCloseWrapper(void *arg);
 
 // uintptr_to_ptr fabricates an opaque void* from an integer registry handle.

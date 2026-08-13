@@ -53,9 +53,9 @@ func (p *PdInfo) asCStruct() (C.osdp_pd_info_t, func()) {
 	cleanup := func() {}
 
 	cInfo.name = nil
-	cInfo.baud_rate = C.int(p.BaudRate)
+	cInfo.baud_rate = C.uint32_t(p.BaudRate)
 	cInfo.address = C.int(p.Address)
-	cInfo.flags = C.int(p.Flags)
+	cInfo.flags = C.uint32_t(p.Flags)
 
 	cInfo.id.version = C.int(p.ID.Version)
 	cInfo.id.model = C.int(p.ID.Model)

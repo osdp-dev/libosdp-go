@@ -133,7 +133,7 @@ func (cp *ControlPanel) GetFileTransferStatus(pdNumber int) (*FileTransferStatus
 		return nil, fmt.Errorf("control panel context is not initialized")
 	}
 
-	var size, offset C.int
+	var size, offset C.uint32_t
 	ret := C.osdp_get_file_tx_status(unsafe.Pointer(cp.ctx), C.int(pdNumber), &size, &offset)
 	if ret != 0 {
 		return nil, fmt.Errorf("failed to get file transfer status, error code: %d", ret)
@@ -156,7 +156,7 @@ func (pd *PeripheralDevice) GetFileTransferStatus() (*FileTransferStatus, error)
 		return nil, fmt.Errorf("peripheral device context is not initialized")
 	}
 
-	var size, offset C.int
+	var size, offset C.uint32_t
 	ret := C.osdp_get_file_tx_status(unsafe.Pointer(pd.ctx), 0, &size, &offset) // PD mode ignores PD number
 	if ret != 0 {
 		return nil, fmt.Errorf("failed to get file transfer status, error code: %d", ret)
@@ -173,7 +173,7 @@ func (pd *PeripheralDevice) GetFileTransferStatus() (*FileTransferStatus, error)
 // C callback wrappers for file operations
 
 //export fileOpenWrapper
-func fileOpenWrapper(arg unsafe.Pointer, fileID C.int, size *C.int) C.int {
+func fileOpenWrapper(arg unsafe.Pointer, fileID C.int, size *C.uint32_t) C.int {
 	fileOps, ok := fileOpsLookup(uintptr(arg))
 	if !ok {
 		return C.int(-1)
@@ -184,18 +184,18 @@ func fileOpenWrapper(arg unsafe.Pointer, fileID C.int, size *C.int) C.int {
 		return C.int(-1)
 	}
 
-	*size = C.int(fileSize)
+	*size = C.uint32_t(fileSize)
 	return C.int(0)
 }
 
 //export fileReadWrapper
-func fileReadWrapper(arg unsafe.Pointer, buf unsafe.Pointer, size C.int, offset C.int) C.int {
+func fileReadWrapper(arg unsafe.Pointer, buf unsafe.Pointer, size C.uint32_t, offset C.uint32_t) C.int {
 	fileOps, ok := fileOpsLookup(uintptr(arg))
 	if !ok {
 		return C.int(-1)
 	}
 
-	buffer := (*[1 << 30]byte)(buf)[:size:size]
+	buffer := (*[1 << 30]byte)(buf)[:int(size):int(size)]
 	bytesRead, err := fileOps.Read(buffer, int(size), int(offset))
 	if err != nil {
 		return C.int(-1)
@@ -205,13 +205,13 @@ func fileReadWrapper(arg unsafe.Pointer, buf unsafe.Pointer, size C.int, offset 
 }
 
 //export fileWriteWrapper
-func fileWriteWrapper(arg unsafe.Pointer, buf unsafe.Pointer, size C.int, offset C.int) C.int {
+func fileWriteWrapper(arg unsafe.Pointer, buf unsafe.Pointer, size C.uint32_t, offset C.uint32_t) C.int {
 	fileOps, ok := fileOpsLookup(uintptr(arg))
 	if !ok {
 		return C.int(-1)
 	}
 
-	buffer := (*[1 << 30]byte)(buf)[:size:size]
+	buffer := (*[1 << 30]byte)(buf)[:int(size):int(size)]
 	bytesWritten, err := fileOps.Write(buffer, int(size), int(offset))
 	if err != nil {
 		return C.int(-1)

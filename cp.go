@@ -365,7 +365,7 @@ func (cp *ControlPanel) GetPDCapability(pdNumber int, functionCode PdCapabilityF
 	}
 
 	cap := C.struct_osdp_pd_cap{
-		function_code: C.uchar(functionCode),
+		function_code: C.enum_osdp_pd_cap_function_code_e(functionCode),
 	}
 
 	ret := C.osdp_cp_get_capability(unsafe.Pointer(cp.ctx), C.int(pdNumber), &cap)

@@ -93,11 +93,11 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 		capArray := (*[1 << 30]C.struct_osdp_pd_cap)(unsafe.Pointer(capArrayPtr))
 
 		for i, cap := range capabilities {
-			capArray[i].function_code = C.uchar(cap.Function)
+			capArray[i].function_code = C.enum_osdp_pd_cap_function_code_e(cap.Function)
 			capArray[i].compliance_level = C.uchar(cap.Compliance)
 			capArray[i].num_items = C.uchar(cap.NumItems)
 		}
-		capArray[len(capabilities)].function_code = C.uchar(0xFF)
+		capArray[len(capabilities)].function_code = C.OSDP_PD_CAP_SENTINEL
 		capArray[len(capabilities)].compliance_level = 0
 		capArray[len(capabilities)].num_items = 0
 
@@ -431,11 +431,11 @@ func (pd *PeripheralDevice) SetCapabilities(capabilities []PdCapability) error {
 
 	arr := make([]C.struct_osdp_pd_cap, len(capabilities)+1)
 	for i, c := range capabilities {
-		arr[i].function_code = C.uchar(c.Function)
+		arr[i].function_code = C.enum_osdp_pd_cap_function_code_e(c.Function)
 		arr[i].compliance_level = C.uchar(c.Compliance)
 		arr[i].num_items = C.uchar(c.NumItems)
 	}
-	arr[len(capabilities)].function_code = C.uchar(0xFF)
+	arr[len(capabilities)].function_code = C.OSDP_PD_CAP_SENTINEL
 
 	C.osdp_pd_set_capabilities(unsafe.Pointer(pd.ctx), &arr[0])
 	pd.capabilities = capabilities
