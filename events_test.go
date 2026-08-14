@@ -171,8 +171,10 @@ func TestEventGeneration(t *testing.T) {
 // TestMfgReplyLargePayload round-trips an MFGREP event whose payload exceeds the
 // old 64-byte decode buffer (but stays within the 128-byte C max) through a real
 // CP/PD FIFO pair. Before the decode-buffer fix, get_event_mfgrep memcpy'd 100
-// bytes into a 64-byte Go slice, corrupting the heap; the fix sizes the buffer to
-// OSDP_EVENT_MFGREP_MAX_DATALEN so the decoded Data must match exactly.
+// bytes into a 64-byte Go slice, corrupting the heap. The byte-equality assertion
+// here only guards against truncation/decode-length regressions (a shrunk buffer
+// would fail this check); it does not itself detect the heap overflow. Run with
+// AddressSanitizer (`go test -asan`) to catch the overflow directly.
 func TestMfgReplyLargePayload(t *testing.T) {
 	data := make([]byte, 100) // > old 64-byte buffer, < 128 C max
 	for i := range data {

@@ -138,7 +138,7 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 	case EvtCardRead:
 		var readerNo, format, direction C.uint8_t
 		var lengthBits C.int
-		cardData := make([]C.uint8_t, 64) // OSDP_EVENT_CARDREAD_MAX_DATALEN
+		cardData := make([]C.uint8_t, C.OSDP_EVENT_CARDREAD_MAX_DATALEN)
 		C.get_event_cardread(cEvent, &readerNo, &format, &direction, &lengthBits, &cardData[0])
 
 		nbytes := (int(lengthBits) + 7) / 8
@@ -147,12 +147,12 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			Format:    OsdpCardFormat(format),
 			Direction: direction != 0,
 			NrBits:    uint32(lengthBits),
-			// SAFETY: cardData is a valid 64-byte buffer; nbytes = ceil(bits/8).
+			// SAFETY: cardData is sized to OSDP_EVENT_CARDREAD_MAX_DATALEN; nbytes = ceil(bits/8).
 			Data: C.GoBytes(unsafe.Pointer(&cardData[0]), C.int(nbytes)),
 		}
 	case EvtKeypress:
 		var readerNo, length C.uint8_t
-		keypadData := make([]C.uint8_t, 64) // OSDP_EVENT_KEYPRESS_MAX_DATALEN
+		keypadData := make([]C.uint8_t, C.OSDP_EVENT_KEYPRESS_MAX_DATALEN)
 		C.get_event_keypress(cEvent, &readerNo, &length, &keypadData[0])
 
 		eventData = EventKeyPress{
@@ -178,7 +178,7 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 		}
 	case EvtStatus:
 		var reportType, nrEntries C.uint8_t
-		statusReport := make([]C.uint8_t, 64) // OSDP_STATUS_REPORT_MAX_LEN
+		statusReport := make([]C.uint8_t, C.OSDP_STATUS_REPORT_MAX_LEN)
 		C.get_event_status(cEvent, &reportType, &nrEntries, &statusReport[0])
 
 		eventData = EventStatus{
