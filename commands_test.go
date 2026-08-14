@@ -7,12 +7,89 @@
 package osdp_test
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/osdp-dev/libosdp-go"
 )
+
+// TestCommandTextEmbeddedNUL verifies that a text command whose payload contains
+// an embedded NUL byte round-trips through the CP->PD command path without being
+// truncated at the first NUL (as C.GoString would do).
+func TestCommandTextEmbeddedNUL(t *testing.T) {
+	cpRx, cpTx, pdRx, pdTx, cleanup := createFIFOPair(t)
+	defer cleanup()
+
+	in := []byte{'A', 0x00, 'B', 'C'}
+	id := osdp.PdId{Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345, FirmwareMajor: 1}
+
+	got := make(chan []byte, 1)
+
+	pdChannel, err := osdp.NewFIFOChannel(pdRx, pdTx)
+	if err != nil {
+		t.Fatalf("PD channel: %v", err)
+	}
+	defer pdChannel.Close()
+
+	pd, err := osdp.NewPeripheralDevice(pdChannel,
+		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id},
+		[]osdp.PdCapability{{Function: osdp.CapReaderTextOutput, Compliance: 1, NumItems: 1}},
+		osdp.LogError)
+	if err != nil {
+		t.Fatalf("NewPeripheralDevice: %v", err)
+	}
+	defer pd.Stop()
+
+	if err := pd.SetCommandHandler(func(command *osdp.Command) (int, *osdp.Event) {
+		if text, ok := command.Command.(osdp.CommandText); ok {
+			cp := make([]byte, len(text.Data))
+			copy(cp, text.Data)
+			select {
+			case got <- cp:
+			default:
+			}
+		}
+		return 0, nil
+	}); err != nil {
+		t.Fatalf("SetCommandHandler: %v", err)
+	}
+
+	cpChannel, err := osdp.NewFIFOChannel(cpRx, cpTx)
+	if err != nil {
+		t.Fatalf("CP channel: %v", err)
+	}
+	defer cpChannel.Close()
+
+	cp, err := osdp.NewControlPanel(cpChannel,
+		[]*osdp.PdInfo{{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id}},
+		osdp.LogError)
+	if err != nil {
+		t.Fatalf("NewControlPanel: %v", err)
+	}
+	defer cp.Stop()
+
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online within timeout")
+	}
+
+	textCmd := &osdp.Command{Command: osdp.CommandText{
+		Reader: 0, ControlCode: 1, TempTime: 0, OffsetRow: 1, OffsetCol: 1, Data: in,
+	}}
+	if err := cp.SubmitCommand(0, textCmd); err != nil {
+		t.Fatalf("SubmitCommand: %v", err)
+	}
+
+	select {
+	case data := <-got:
+		if !bytes.Equal(data, in) {
+			t.Errorf("decoded text Data = %q (len %d), want %q (len %d)", data, len(data), in, len(in))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("PD did not receive the text command")
+	}
+}
 
 // TestMultipleCommands tests sending multiple different commands
 func TestMultipleCommands(t *testing.T) {

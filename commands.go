@@ -219,7 +219,7 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		}
 	case CmdText:
 		var reader, controlCode, tempTime, offsetRow, offsetCol, length C.uint8_t
-		textData := make([]C.char, 64) // OSDP_CMD_TEXT_MAX_LEN
+		textData := make([]C.char, C.OSDP_CMD_TEXT_MAX_LEN)
 		C.get_cmd_text(cCmd, &reader, &controlCode, &tempTime, &offsetRow, &offsetCol, &length, &textData[0])
 		commandData = CommandText{
 			Reader:      uint8(reader),
@@ -227,7 +227,8 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 			TempTime:    uint8(tempTime),
 			OffsetRow:   uint8(offsetRow),
 			OffsetCol:   uint8(offsetCol),
-			Data:        []byte(C.GoString(&textData[0])),
+			// Copy exactly length bytes so embedded NULs are preserved.
+			Data: C.GoBytes(unsafe.Pointer(&textData[0]), C.int(length)),
 		}
 	case CmdStatus:
 		// A STATUS command carries the requested report type; the PD responds

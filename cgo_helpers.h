@@ -131,7 +131,7 @@ static inline void set_cmd_mfg(struct osdp_cmd *cmd, uint32_t vendor_code, uint8
 // Event helper functions
 // cardread.length is the card data length in *bits*; the data buffer holds the
 // ceil(length/8) bytes. Keep the two counts distinct to avoid over-reads.
-static inline void get_event_cardread(struct osdp_event *ev, uint8_t *reader_no, uint8_t *format, uint8_t *direction, int *length_bits, uint8_t *data) {
+static inline void get_event_cardread(struct osdp_event *ev, int *reader_no, uint8_t *format, int *direction, uint16_t *length_bits, uint8_t *data) {
     *reader_no = ev->cardread.reader_no;
     *format = ev->cardread.format;
     *direction = ev->cardread.direction;
@@ -139,7 +139,7 @@ static inline void get_event_cardread(struct osdp_event *ev, uint8_t *reader_no,
     memcpy(data, ev->cardread.data, (ev->cardread.length + 7) / 8);
 }
 
-static inline void get_event_keypress(struct osdp_event *ev, uint8_t *reader_no, uint8_t *length, uint8_t *data) {
+static inline void get_event_keypress(struct osdp_event *ev, int *reader_no, int *length, uint8_t *data) {
     *reader_no = ev->keypress.reader_no;
     *length = ev->keypress.length;
     memcpy(data, ev->keypress.data, ev->keypress.length);

@@ -136,8 +136,9 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 
 	switch OsdpEventType(cEvent._type) {
 	case EvtCardRead:
-		var readerNo, format, direction C.uint8_t
-		var lengthBits C.int
+		var readerNo, direction C.int
+		var format C.uint8_t
+		var lengthBits C.uint16_t
 		cardData := make([]C.uint8_t, C.OSDP_EVENT_CARDREAD_MAX_DATALEN)
 		C.get_event_cardread(cEvent, &readerNo, &format, &direction, &lengthBits, &cardData[0])
 
@@ -151,7 +152,7 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			Data: C.GoBytes(unsafe.Pointer(&cardData[0]), C.int(nbytes)),
 		}
 	case EvtKeypress:
-		var readerNo, length C.uint8_t
+		var readerNo, length C.int
 		keypadData := make([]C.uint8_t, C.OSDP_EVENT_KEYPRESS_MAX_DATALEN)
 		C.get_event_keypress(cEvent, &readerNo, &length, &keypadData[0])
 
