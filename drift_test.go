@@ -8,13 +8,16 @@ package osdp
 
 import "testing"
 
-// These counts are pinned to the vendored LibOSDP header. When upstream adds an
-// enum member, the matching assertion fails: bind the new member in the Go layer
-// (or, if intentionally deferring, bump the count here WITH a comment explaining
-// why it stays unbound). SENTINEL-terminated enums expose their member count as
-// the sentinel's integer value; the notification and status-report enums have no
-// sentinel, so their last member's ordinal is pinned instead (an upstream insert
-// shifts it).
+// These counts are pinned to the vendored LibOSDP header. For the four
+// SENTINEL-terminated enums (cmd, event, pd_cap, card_fmt), when upstream adds
+// a member anywhere — inserted or appended — the sentinel's integer value
+// changes and the matching assertion fails: bind the new member in the Go
+// layer (or, if intentionally deferring, bump the count here WITH a comment
+// explaining why it stays unbound). The notification and status-report enums
+// have no sentinel, so their last member's ordinal is pinned instead; this
+// only catches a member INSERTED before that last member, NOT one APPENDED
+// after it (the conventional way wire-format enums grow) — see the caveats on
+// expectedNotificationLast/expectedStatusReportLast below.
 //
 // The live C values are read in drift.go (a non-test file) and exposed as the
 // drift* constants below, because the Go toolchain rejects `import "C"` in any
@@ -39,9 +42,13 @@ const (
 	expectedCardFmtSentinel = 3
 
 	// osdp_notification_type last member ordinal (no sentinel): MP_DONE.
+	// Catches an insert before MP_DONE, NOT a member appended after it (C has
+	// no sentinel to bump); the robust fix is an upstream sentinel.
 	expectedNotificationLast = 5
 
 	// osdp_status_report_type last member ordinal (no sentinel): READER.
+	// Catches an insert before READER, NOT a member appended after it (C has
+	// no sentinel to bump); the robust fix is an upstream sentinel.
 	expectedStatusReportLast = 3
 )
 
