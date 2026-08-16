@@ -421,7 +421,7 @@ func pdEventCompletionWrapper(arg unsafe.Pointer, cEvent *C.struct_osdp_event, s
 }
 
 // SetCapabilities replaces this PD's advertised capabilities. The capabilities
-// are copied into libosdp; a 0xFF sentinel terminator is appended automatically.
+// are copied into libosdp; an OSDP_PD_CAP_SENTINEL terminator is appended automatically.
 func (pd *PeripheralDevice) SetCapabilities(capabilities []PdCapability) error {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()

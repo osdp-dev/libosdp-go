@@ -108,6 +108,12 @@ const (
 	CapBiometrics              PdCapabilityFunction = C.OSDP_PD_CAP_BIOMETRICS
 )
 
+// Status report semantics changed upstream: report bytes are now one byte per
+// entity (not bit-packed). StatusReportLocal is always exactly 2 entries.
+// osdp_pd_submit_event rejects a report whose entry count does not match the
+// capability the PD advertised. StatusReportReader entries are 0=normal,
+// 1=not connected, 2=tamper.
+//
 // OsdpStatusReportType represents different status report types
 type OsdpStatusReportType int
 
@@ -149,7 +155,8 @@ const (
 	NotificationMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
 )
 
-// FileTxOutcome is the outcome reported by a FILE_TX_DONE notification (arg1).
+// FileTxOutcome is the outcome reported by an OSDP_NOTIFICATION_MP_DONE
+// notification (arg1) for a file transfer.
 type FileTxOutcome int
 
 const (
