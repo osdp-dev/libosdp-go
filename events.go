@@ -79,6 +79,7 @@ func eventToC(event *Event) *C.struct_osdp_event {
 	if cEvent == nil {
 		return nil
 	}
+	C.memset(unsafe.Pointer(cEvent), 0, C.size_t(unsafe.Sizeof(C.struct_osdp_event{})))
 
 	cEvent._type = C.enum_osdp_event_type(event.Event.GetType())
 

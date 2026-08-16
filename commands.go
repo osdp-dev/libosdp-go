@@ -241,7 +241,7 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 	case CmdMfg:
 		var vendorCode C.uint32_t
 		var length C.uint8_t
-		mfgData := make([]C.uint8_t, 64) // OSDP_CMD_MFG_MAX_DATALEN
+		mfgData := make([]C.uint8_t, C.OSDP_CMD_MFG_MAX_DATALEN)
 		C.get_cmd_mfg(cCmd, &vendorCode, &length, &mfgData[0])
 
 		// Convert vendor code to 3-byte array
@@ -257,7 +257,7 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		}
 	case CmdKeyset:
 		var keysetType, length C.uint8_t
-		keysetData := make([]C.uint8_t, 32) // OSDP_CMD_KEYSET_KEY_MAX_LEN
+		keysetData := make([]C.uint8_t, C.OSDP_CMD_KEYSET_KEY_MAX_LEN)
 		C.get_cmd_keyset(cCmd, &keysetType, &length, &keysetData[0])
 		commandData = CommandKeyset{
 			KeyType: uint8(keysetType),

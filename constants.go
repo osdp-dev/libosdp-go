@@ -155,8 +155,10 @@ const (
 	NotificationMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
 )
 
-// FileTxOutcome is the outcome reported by an OSDP_NOTIFICATION_MP_DONE
-// notification (arg1) for a file transfer.
+// FileTxOutcome enumerates the possible outcomes of a multipart file transfer.
+// NOTE: the outcome value is not yet surfaced through EventNotification — the
+// MP_DONE notification currently exposes only offset/total via Arg0/Arg1.
+// Decoding the outcome field is deferred to Phase 2.
 type FileTxOutcome int
 
 const (
