@@ -10,7 +10,23 @@ package osdp
 #include "cgo_helpers.h"
 */
 import "C"
-import "unsafe"
+import (
+	"fmt"
+	"unsafe"
+)
+
+// checkLen returns an error when a variable-length payload exceeds the fixed C
+// buffer it will be copied into, so an over-length submission is rejected rather
+// than overflowing the destination array.
+func checkLen(name string, n, max int) error {
+	if n > max {
+		return fmt.Errorf("osdp: %s length %d exceeds max %d", name, n, max)
+	}
+	return nil
+}
+
+// freeCmd releases a C osdp_cmd allocated by commandToC.
+func freeCmd(c *C.struct_osdp_cmd) { C.free(unsafe.Pointer(c)) }
 
 // Command represents an OSDP command. Flags may carry command flags such as
 // CmdFlagBroadcast.
@@ -118,11 +134,12 @@ type CommandStatus struct {
 func (c CommandStatus) GetType() OsdpCommandType { return CmdStatus }
 
 // commandToC converts a Go Command to a newly malloc'd C osdp_cmd structure.
-// The caller owns the returned memory.
-func commandToC(cmd *Command) *C.struct_osdp_cmd {
+// The caller owns the returned memory. It returns an error (and frees the
+// allocation) when a variable-length payload exceeds its C buffer.
+func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 	cCmd := (*C.struct_osdp_cmd)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_osdp_cmd{}))))
 	if cCmd == nil {
-		return nil
+		return nil, fmt.Errorf("osdp: failed to allocate command")
 	}
 
 	// Initialize the structure to zero
@@ -143,27 +160,47 @@ func commandToC(cmd *Command) *C.struct_osdp_cmd {
 	case CommandBuzzer:
 		C.set_cmd_buzzer(cCmd, C.uint8_t(cmdData.Reader), C.uint8_t(cmdData.ControlCode), C.uint8_t(cmdData.OnCount), C.uint8_t(cmdData.OffCount), C.uint8_t(cmdData.RepCount))
 	case CommandText:
+		if err := checkLen("text", len(cmdData.Data), C.OSDP_CMD_TEXT_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
 		textData := (*C.char)(C.CBytes(cmdData.Data))
 		defer C.free(unsafe.Pointer(textData))
 		C.set_cmd_text(cCmd, C.uint8_t(cmdData.Reader), C.uint8_t(cmdData.ControlCode), C.uint8_t(cmdData.TempTime), C.uint8_t(cmdData.OffsetRow), C.uint8_t(cmdData.OffsetCol), textData, C.uint8_t(len(cmdData.Data)))
 	case CommandStatus:
 		C.set_cmd_status(cCmd, C.uint8_t(cmdData.Type))
 	case CommandMfg:
+		if err := checkLen("mfg", len(cmdData.Data), C.OSDP_CMD_MFG_MAX_DATALEN); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
 		vendorCode := uint32(cmdData.VendorCode[0]) | uint32(cmdData.VendorCode[1])<<8 | uint32(cmdData.VendorCode[2])<<16
-		C.set_cmd_mfg(cCmd, C.uint32_t(vendorCode), (*C.uint8_t)(unsafe.Pointer(&cmdData.Data[0])), C.uint8_t(len(cmdData.Data)))
+		var dataPtr *C.uint8_t
+		if len(cmdData.Data) > 0 {
+			dataPtr = (*C.uint8_t)(unsafe.Pointer(&cmdData.Data[0]))
+		}
+		C.set_cmd_mfg(cCmd, C.uint32_t(vendorCode), dataPtr, C.uint8_t(len(cmdData.Data)))
 	case CommandKeyset:
+		if err := checkLen("keyset", len(cmdData.Data), C.OSDP_CMD_KEYSET_KEY_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
 		keysetData := make([]C.uint8_t, len(cmdData.Data))
 		for i, b := range cmdData.Data {
 			keysetData[i] = C.uint8_t(b)
 		}
-		C.set_cmd_keyset(cCmd, C.uint8_t(cmdData.KeyType), C.uint8_t(len(cmdData.Data)), &keysetData[0])
+		var ksPtr *C.uint8_t
+		if len(keysetData) > 0 {
+			ksPtr = &keysetData[0]
+		}
+		C.set_cmd_keyset(cCmd, C.uint8_t(cmdData.KeyType), C.uint8_t(len(cmdData.Data)), ksPtr)
 	case CommandComset:
 		C.set_cmd_comset(cCmd, C.uint8_t(cmdData.Address), C.uint32_t(cmdData.BaudRate))
 	case CommandFileTx:
 		C.set_cmd_file_tx(cCmd, C.int32_t(cmdData.ID), C.uint32_t(cmdData.Flags))
 	}
 
-	return cCmd
+	return cCmd, nil
 }
 
 // decodeCommand converts a C osdp_cmd to a Go Command. It reads only cCmd, so it

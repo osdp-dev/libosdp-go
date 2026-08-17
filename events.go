@@ -10,7 +10,13 @@ package osdp
 #include "cgo_helpers.h"
 */
 import "C"
-import "unsafe"
+import (
+	"fmt"
+	"unsafe"
+)
+
+// freeEvent releases a C osdp_event allocated by eventToC.
+func freeEvent(c *C.struct_osdp_event) { C.free(unsafe.Pointer(c)) }
 
 // Event represents an OSDP event
 type Event struct {
@@ -74,10 +80,10 @@ func (e EventMfgReply) GetType() OsdpEventType { return EvtMfgReply }
 
 // eventToC converts a Go Event to a newly malloc'd C osdp_event structure. The
 // caller owns the returned memory.
-func eventToC(event *Event) *C.struct_osdp_event {
+func eventToC(event *Event) (*C.struct_osdp_event, error) {
 	cEvent := (*C.struct_osdp_event)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_osdp_event{}))))
 	if cEvent == nil {
-		return nil
+		return nil, fmt.Errorf("osdp: failed to allocate event")
 	}
 	C.memset(unsafe.Pointer(cEvent), 0, C.size_t(unsafe.Sizeof(C.struct_osdp_event{})))
 
@@ -85,6 +91,10 @@ func eventToC(event *Event) *C.struct_osdp_event {
 
 	switch eventData := event.Event.(type) {
 	case EventCardRead:
+		if err := checkLen("cardread", len(eventData.Data), C.OSDP_EVENT_CARDREAD_MAX_DATALEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
 		cardData := make([]C.uint8_t, len(eventData.Data))
 		for i, b := range eventData.Data {
 			cardData[i] = C.uint8_t(b)
@@ -101,13 +111,25 @@ func eventToC(event *Event) *C.struct_osdp_event {
 			C.int(eventData.NrBits), dataPtr, C.int(len(eventData.Data)))
 
 	case EventKeyPress:
+		if err := checkLen("keypress", len(eventData.Data), C.OSDP_EVENT_KEYPRESS_MAX_DATALEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
 		keypadData := make([]C.uint8_t, len(eventData.Data))
 		for i, b := range eventData.Data {
 			keypadData[i] = C.uint8_t(b)
 		}
-		C.set_event_keypress(cEvent, C.uint8_t(eventData.ReaderNo), C.uint8_t(len(eventData.Data)), &keypadData[0])
+		var keyPtr *C.uint8_t
+		if len(keypadData) > 0 {
+			keyPtr = &keypadData[0]
+		}
+		C.set_event_keypress(cEvent, C.uint8_t(eventData.ReaderNo), C.uint8_t(len(eventData.Data)), keyPtr)
 
 	case EventStatus:
+		if err := checkLen("status report", len(eventData.Report), C.OSDP_STATUS_REPORT_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
 		reportData := make([]C.uint8_t, len(eventData.Report))
 		for i, b := range eventData.Report {
 			reportData[i] = C.uint8_t(b)
@@ -119,15 +141,23 @@ func eventToC(event *Event) *C.struct_osdp_event {
 		C.set_event_status_report(cEvent, C.uint8_t(eventData.Type), C.uint8_t(len(eventData.Report)), reportPtr)
 
 	case EventMfgReply:
+		if err := checkLen("mfgrep", len(eventData.Data), C.OSDP_EVENT_MFGREP_MAX_DATALEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
 		mfgData := make([]C.uint8_t, len(eventData.Data))
 		for i, b := range eventData.Data {
 			mfgData[i] = C.uint8_t(b)
 		}
+		var mfgPtr *C.uint8_t
+		if len(mfgData) > 0 {
+			mfgPtr = &mfgData[0]
+		}
 		vendorCode := uint32(eventData.VendorCode[0]) | uint32(eventData.VendorCode[1])<<8 | uint32(eventData.VendorCode[2])<<16
-		C.set_event_mfgrep(cEvent, C.uint32_t(vendorCode), C.uint8_t(len(eventData.Data)), &mfgData[0])
+		C.set_event_mfgrep(cEvent, C.uint32_t(vendorCode), C.uint8_t(len(eventData.Data)), mfgPtr)
 	}
 
-	return cEvent
+	return cEvent, nil
 }
 
 // decodeEvent converts a C osdp_event to a Go Event. It reads only cEvent, so it

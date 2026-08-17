@@ -238,9 +238,9 @@ func (cp *ControlPanel) SubmitCommand(pdNumber int, cmd *Command) error {
 		return fmt.Errorf("control panel context is not initialized")
 	}
 
-	cCmd := commandToC(cmd)
-	if cCmd == nil {
-		return fmt.Errorf("failed to convert command to C structure")
+	cCmd, err := commandToC(cmd)
+	if err != nil {
+		return err
 	}
 
 	// libosdp takes ownership of cCmd via its intrusive zero-copy queue; it must

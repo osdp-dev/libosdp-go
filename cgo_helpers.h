@@ -125,7 +125,7 @@ static inline void set_cmd_status_response(struct osdp_cmd *cmd, uint8_t type, i
 static inline void set_cmd_mfg(struct osdp_cmd *cmd, uint32_t vendor_code, uint8_t *data, uint8_t length) {
     cmd->mfg.vendor_code = vendor_code;
     cmd->mfg.length = length;
-    memcpy(cmd->mfg.data, data, length);
+    if (length) memcpy(cmd->mfg.data, data, length);
 }
 
 // Event helper functions
@@ -198,19 +198,19 @@ static inline void set_event_cardread(struct osdp_event *ev, uint8_t reader_no, 
 static inline void set_event_keypress(struct osdp_event *ev, uint8_t reader_no, uint8_t length, uint8_t *data) {
     ev->keypress.reader_no = reader_no;
     ev->keypress.length = length;
-    memcpy(ev->keypress.data, data, length);
+    if (length) memcpy(ev->keypress.data, data, length);
 }
 
 static inline void set_event_status_report(struct osdp_event *ev, uint8_t type, uint8_t nr_entries, uint8_t *report) {
     ev->status.type = type;
     ev->status.nr_entries = nr_entries;
-    memcpy(ev->status.report, report, nr_entries);
+    if (nr_entries) memcpy(ev->status.report, report, nr_entries);
 }
 
 static inline void set_event_mfgrep(struct osdp_event *ev, uint32_t vendor_code, uint8_t length, uint8_t *data) {
     ev->mfgrep.vendor_code = vendor_code;
     ev->mfgrep.length = length;
-    memcpy(ev->mfgrep.data, data, length);
+    if (length) memcpy(ev->mfgrep.data, data, length);
 }
 
 // Command parsing helper functions
@@ -271,7 +271,7 @@ static inline void get_cmd_mfg(struct osdp_cmd *cmd, uint32_t *vendor_code, uint
 static inline void set_cmd_keyset(struct osdp_cmd *cmd, uint8_t type, uint8_t length, uint8_t *data) {
     cmd->keyset.type = type;
     cmd->keyset.length = length;
-    memcpy(cmd->keyset.data, data, length);
+    if (length) memcpy(cmd->keyset.data, data, length);
 }
 
 static inline void set_cmd_comset(struct osdp_cmd *cmd, uint8_t address, uint32_t baud_rate) {

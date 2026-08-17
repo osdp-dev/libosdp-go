@@ -234,9 +234,9 @@ func (pd *PeripheralDevice) SubmitEvent(event *Event) error {
 		return fmt.Errorf("peripheral device context is not initialized")
 	}
 
-	cEvent := eventToC(event)
-	if cEvent == nil {
-		return fmt.Errorf("failed to convert event to C structure")
+	cEvent, err := eventToC(event)
+	if err != nil {
+		return err
 	}
 
 	// libosdp takes ownership of cEvent via its intrusive zero-copy queue: the
