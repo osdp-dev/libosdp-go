@@ -45,6 +45,17 @@ func TestEncodeRejectsOverLengthPayload(t *testing.T) {
 	}
 }
 
+func TestMfgCommandRoundTrip(t *testing.T) {
+	in := CommandMfg{VendorCode: [3]uint8{0x11, 0x22, 0x33}, Data: []byte{1, 2, 3, 4}}
+	got, ok := roundTripCommand(t, &Command{Command: in}).Command.(CommandMfg)
+	if !ok {
+		t.Fatalf("decoded type mismatch")
+	}
+	if got.VendorCode != in.VendorCode || !bytes.Equal(got.Data, in.Data) {
+		t.Errorf("round-trip = %+v, want %+v", got, in)
+	}
+}
+
 func TestEncodeAcceptsEmptyPayload(t *testing.T) {
 	got := roundTripCommand(t, &Command{Command: CommandMfg{VendorCode: [3]uint8{1, 2, 3}, Data: nil}})
 	mfg, ok := got.Command.(CommandMfg)

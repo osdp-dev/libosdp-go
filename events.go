@@ -72,7 +72,6 @@ func (e EventNotification) GetType() OsdpEventType { return EvtNotification }
 // EventMfgReply represents manufacturer reply event
 type EventMfgReply struct {
 	VendorCode [3]uint8
-	Reply      uint8
 	Data       []byte
 }
 
@@ -205,7 +204,6 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 
 		eventData = EventMfgReply{
 			VendorCode: vendorArray,
-			Reply:      0, // Command/reply code not available from C function
 			Data:       C.GoBytes(unsafe.Pointer(&mfgData[0]), C.int(length)),
 		}
 	case EvtStatus:

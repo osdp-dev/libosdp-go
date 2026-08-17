@@ -193,7 +193,6 @@ func createCommandHandler(pdName string, pdNumber int) osdp.CommandHandler {
 			return 0, &osdp.Event{
 				Event: osdp.EventMfgReply{
 					VendorCode: cmdData.VendorCode,
-					Reply:      cmdData.Command,
 					Data:       append(cmdData.Data, []byte(" ACK")...),
 				},
 			}

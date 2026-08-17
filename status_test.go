@@ -57,7 +57,6 @@ func TestStatusAndMfgCommands(t *testing.T) {
 					mfgReply := &osdp.Event{
 						Event: osdp.EventMfgReply{
 							VendorCode: mfg.VendorCode,
-							Reply:      mfg.Command,
 							Data:       append(mfg.Data, []byte(" OK")...),
 						},
 					}
@@ -168,7 +167,6 @@ func TestStatusAndMfgCommands(t *testing.T) {
 		mfgCmd := &osdp.Command{
 			Command: osdp.CommandMfg{
 				VendorCode: [3]uint8{0x53, 0x01, 0x00}, // 0x153 in little endian
-				Command:    0x01,
 				Data:       []byte("Hello MFG"),
 			},
 		}

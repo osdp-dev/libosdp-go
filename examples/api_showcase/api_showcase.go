@@ -423,7 +423,6 @@ func testMfgCommands(cp *osdp.ControlPanel) {
 	mfgCmd := &osdp.Command{
 		Command: osdp.CommandMfg{
 			VendorCode: [3]uint8{0x53, 0x01, 0x00}, // 0x153 in little endian
-			Command:    0x01,
 			Data:       []byte("Go OSDP Test"),
 		},
 	}

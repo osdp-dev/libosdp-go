@@ -119,7 +119,6 @@ func (c CommandFileTx) GetType() OsdpCommandType { return CmdFileTx }
 // CommandMfg represents manufacturer specific command
 type CommandMfg struct {
 	VendorCode [3]uint8
-	Command    uint8
 	Data       []byte
 }
 
@@ -289,7 +288,6 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 
 		commandData = CommandMfg{
 			VendorCode: vendorArray,
-			Command:    0, // Command code not available from C function
 			Data:       C.GoBytes(unsafe.Pointer(&mfgData[0]), C.int(length)),
 		}
 	case CmdKeyset:
