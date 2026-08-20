@@ -147,18 +147,29 @@ const (
 type NotificationType int
 
 const (
-	NotificationCommand    NotificationType = C.OSDP_NOTIFICATION_COMMAND
-	NotificationSCStatus   NotificationType = C.OSDP_NOTIFICATION_SC_STATUS
-	NotificationPDStatus   NotificationType = C.OSDP_NOTIFICATION_PD_STATUS
-	NotificationMPStart    NotificationType = C.OSDP_NOTIFICATION_MP_START
-	NotificationMPProgress NotificationType = C.OSDP_NOTIFICATION_MP_PROGRESS
-	NotificationMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
+	NotificationTypeCommand    NotificationType = C.OSDP_NOTIFICATION_COMMAND
+	NotificationTypeSCStatus   NotificationType = C.OSDP_NOTIFICATION_SC_STATUS
+	NotificationTypePDStatus   NotificationType = C.OSDP_NOTIFICATION_PD_STATUS
+	NotificationTypeMPStart    NotificationType = C.OSDP_NOTIFICATION_MP_START
+	NotificationTypeMPProgress NotificationType = C.OSDP_NOTIFICATION_MP_PROGRESS
+	NotificationTypeMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
+)
+
+// MPMsgType identifies the multipart message family carried by an MP_*
+// notification.
+type MPMsgType uint8
+
+const (
+	MPMsgFileTransfer MPMsgType = C.OSDP_MP_MSG_FILE_TRANSFER
+	MPMsgPIV          MPMsgType = C.OSDP_MP_MSG_PIV
+	MPMsgGenAuth      MPMsgType = C.OSDP_MP_MSG_GENAUTH
+	MPMsgCRAuth       MPMsgType = C.OSDP_MP_MSG_CRAUTH
+	MPMsgBioRead      MPMsgType = C.OSDP_MP_MSG_BIOREAD
 )
 
 // FileTxOutcome enumerates the possible outcomes of a multipart file transfer.
-// NOTE: the outcome value is not yet surfaced through EventNotification — the
-// MP_DONE notification currently exposes only offset/total via Arg0/Arg1.
-// Decoding the outcome field is deferred to Phase 2.
+// It is surfaced as NotificationMP.Outcome on a NotificationTypeMPDone
+// notification (meaningful only for that type).
 type FileTxOutcome int
 
 const (

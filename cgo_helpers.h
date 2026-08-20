@@ -157,34 +157,50 @@ static inline void get_event_status(struct osdp_event *ev, uint8_t *type, uint8_
     memcpy(report, ev->status.report, ev->status.nr_entries);
 }
 
-static inline void get_event_notification(struct osdp_event *ev, int *type, int *arg0, int *arg1) {
-    *type = ev->notif.type;
-    switch (ev->notif.type) {
-    case OSDP_NOTIFICATION_COMMAND:
-        *arg0 = ev->notif.command.command;
-        *arg1 = ev->notif.command.success ? 1 : 0;
-        break;
-    case OSDP_NOTIFICATION_SC_STATUS:
-        *arg0 = ev->notif.sc_status.active ? 1 : 0;
-        *arg1 = ev->notif.sc_status.scbk_d ? 1 : 0;
-        break;
-    case OSDP_NOTIFICATION_PD_STATUS:
-        *arg0 = ev->notif.pd_status.online ? 1 : 0;
-        *arg1 = 0;
-        break;
-    case OSDP_NOTIFICATION_MP_START:
-    case OSDP_NOTIFICATION_MP_PROGRESS:
-    case OSDP_NOTIFICATION_MP_DONE:
-        /* offset/total are the progress-relevant fields; outcome is
-         * only meaningful on MP_DONE. Full typed decode is Phase 2. */
-        *arg0 = (int)ev->notif.mp.offset;
-        *arg1 = (int)ev->notif.mp.total;
-        break;
-    default:
-        *arg0 = 0;
-        *arg1 = 0;
-        break;
-    }
+static inline int get_notification_type(struct osdp_event *ev) { return ev->notif.type; }
+
+static inline void get_notification_command(struct osdp_event *ev, int *command, int *success) {
+    *command = ev->notif.command.command;
+    *success = ev->notif.command.success ? 1 : 0;
+}
+static inline void get_notification_sc_status(struct osdp_event *ev, int *active, int *scbk_d) {
+    *active = ev->notif.sc_status.active ? 1 : 0;
+    *scbk_d = ev->notif.sc_status.scbk_d ? 1 : 0;
+}
+static inline void get_notification_pd_status(struct osdp_event *ev, int *online) {
+    *online = ev->notif.pd_status.online ? 1 : 0;
+}
+static inline void get_notification_mp(struct osdp_event *ev, int *mp_type, int *object_id, uint32_t *total, uint32_t *offset, int *outcome) {
+    *mp_type = ev->notif.mp.mp_type;
+    *object_id = ev->notif.mp.object_id;
+    *total = ev->notif.mp.total;
+    *offset = ev->notif.mp.offset;
+    *outcome = ev->notif.mp.outcome;
+}
+
+// Notification setters: notifications are decode-only in production (libosdp
+// synthesizes them), so these exist to construct osdp_event fixtures in tests.
+static inline void set_notification_command(struct osdp_event *ev, int command, int success) {
+    ev->notif.type = OSDP_NOTIFICATION_COMMAND;
+    ev->notif.command.command = command;
+    ev->notif.command.success = success;
+}
+static inline void set_notification_sc_status(struct osdp_event *ev, int active, int scbk_d) {
+    ev->notif.type = OSDP_NOTIFICATION_SC_STATUS;
+    ev->notif.sc_status.active = active;
+    ev->notif.sc_status.scbk_d = scbk_d;
+}
+static inline void set_notification_pd_status(struct osdp_event *ev, int online) {
+    ev->notif.type = OSDP_NOTIFICATION_PD_STATUS;
+    ev->notif.pd_status.online = online;
+}
+static inline void set_notification_mp(struct osdp_event *ev, int type, enum osdp_mp_msg_type mp_type, int object_id, uint32_t total, uint32_t offset, int outcome) {
+    ev->notif.type = type;
+    ev->notif.mp.mp_type = mp_type;
+    ev->notif.mp.object_id = object_id;
+    ev->notif.mp.total = total;
+    ev->notif.mp.offset = offset;
+    ev->notif.mp.outcome = outcome;
 }
 
 static inline void set_event_cardread(struct osdp_event *ev, uint8_t reader_no, uint8_t format, uint8_t direction, int length_bits, uint8_t *data, int data_len) {

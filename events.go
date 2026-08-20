@@ -59,15 +59,57 @@ type EventStatus struct {
 func (e EventStatus) GetType() OsdpEventType { return EvtStatus }
 
 // EventNotification represents a libosdp notification event (synthesized when
-// FlagEnableNotification is set). Arg0/Arg1 meaning depends on Type; see the
-// NotificationType / FileTxOutcome docs.
+// FlagEnableNotification is set). Payload holds the typed detail for Type; type-
+// assert it to the concrete NotificationData that matches Type.
 type EventNotification struct {
-	Type NotificationType
-	Arg0 int
-	Arg1 int
+	Type    NotificationType
+	Payload NotificationData
 }
 
 func (e EventNotification) GetType() OsdpEventType { return EvtNotification }
+
+// NotificationData is the typed payload of an EventNotification. The concrete
+// type corresponds to EventNotification.Type.
+type NotificationData interface{ isNotification() }
+
+// NotificationCommand is the payload of a NotificationTypeCommand notification:
+// an application command reached a terminal state.
+type NotificationCommand struct {
+	Command OsdpCommandType
+	Success bool
+}
+
+func (NotificationCommand) isNotification() {}
+
+// NotificationSCStatus is the payload of a NotificationTypeSCStatus
+// notification: the secure channel session state changed.
+type NotificationSCStatus struct {
+	Active bool
+	SCBKD  bool
+}
+
+func (NotificationSCStatus) isNotification() {}
+
+// NotificationPDStatus is the payload of a NotificationTypePDStatus
+// notification: the peer link came online or went offline.
+type NotificationPDStatus struct {
+	Online bool
+}
+
+func (NotificationPDStatus) isNotification() {}
+
+// NotificationMP is the payload of a NotificationTypeMP{Start,Progress,Done}
+// notification describing a multipart transfer. Outcome is meaningful only when
+// the enclosing Type is NotificationTypeMPDone.
+type NotificationMP struct {
+	MPType   MPMsgType
+	ObjectID int
+	Total    uint32
+	Offset   uint32
+	Outcome  FileTxOutcome
+}
+
+func (NotificationMP) isNotification() {}
 
 // EventMfgReply represents manufacturer reply event
 type EventMfgReply struct {
@@ -216,13 +258,28 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			Report: C.GoBytes(unsafe.Pointer(&statusReport[0]), C.int(nrEntries)),
 		}
 	case EvtNotification:
-		var ntype, arg0, arg1 C.int
-		C.get_event_notification(cEvent, &ntype, &arg0, &arg1)
-		eventData = EventNotification{
-			Type: NotificationType(ntype),
-			Arg0: int(arg0),
-			Arg1: int(arg1),
+		nt := NotificationType(C.get_notification_type(cEvent))
+		var payload NotificationData
+		switch nt {
+		case NotificationTypeCommand:
+			var command, success C.int
+			C.get_notification_command(cEvent, &command, &success)
+			payload = NotificationCommand{Command: OsdpCommandType(command), Success: success != 0}
+		case NotificationTypeSCStatus:
+			var active, scbkD C.int
+			C.get_notification_sc_status(cEvent, &active, &scbkD)
+			payload = NotificationSCStatus{Active: active != 0, SCBKD: scbkD != 0}
+		case NotificationTypePDStatus:
+			var online C.int
+			C.get_notification_pd_status(cEvent, &online)
+			payload = NotificationPDStatus{Online: online != 0}
+		case NotificationTypeMPStart, NotificationTypeMPProgress, NotificationTypeMPDone:
+			var mpType, objectID, outcome C.int
+			var total, offset C.uint32_t
+			C.get_notification_mp(cEvent, &mpType, &objectID, &total, &offset, &outcome)
+			payload = NotificationMP{MPType: MPMsgType(mpType), ObjectID: int(objectID), Total: uint32(total), Offset: uint32(offset), Outcome: FileTxOutcome(outcome)}
 		}
+		eventData = EventNotification{Type: nt, Payload: payload}
 	default:
 		// For unknown event types, return a basic status event
 		eventData = EventStatus{
