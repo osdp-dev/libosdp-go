@@ -201,3 +201,58 @@ func TestCompletionCallbacksAndMetrics(t *testing.T) {
 		t.Errorf("metrics look empty: %+v", m)
 	}
 }
+
+// TestPdInfoCapabilitiesAdvertised verifies that capabilities set on
+// PdInfo.Capabilities (with no explicit capabilities argument) are advertised by
+// the PD and discoverable by the CP via GetPDCapability.
+func TestPdInfoCapabilitiesAdvertised(t *testing.T) {
+	cpRx, cpTx, pdRx, pdTx, cleanup := createFIFOPair(t)
+	defer cleanup()
+
+	id := osdp.PdId{Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345, FirmwareMajor: 1}
+
+	pdChannel, err := osdp.NewFIFOChannel(pdRx, pdTx)
+	if err != nil {
+		t.Fatalf("PD channel: %v", err)
+	}
+	defer pdChannel.Close()
+
+	// Capabilities live ONLY on PdInfo.Capabilities; the explicit argument is nil.
+	pd, err := osdp.NewPeripheralDevice(pdChannel,
+		&osdp.PdInfo{
+			Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id,
+			Capabilities: []osdp.PdCapability{{Function: osdp.CapOutputControl, Compliance: 1, NumItems: 4}},
+		},
+		nil,
+		osdp.LogError)
+	if err != nil {
+		t.Fatalf("NewPeripheralDevice: %v", err)
+	}
+	defer pd.Stop()
+
+	cpChannel, err := osdp.NewFIFOChannel(cpRx, cpTx)
+	if err != nil {
+		t.Fatalf("CP channel: %v", err)
+	}
+	defer cpChannel.Close()
+
+	cp, err := osdp.NewControlPanel(cpChannel,
+		[]*osdp.PdInfo{{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id}},
+		osdp.LogError)
+	if err != nil {
+		t.Fatalf("NewControlPanel: %v", err)
+	}
+	defer cp.Stop()
+
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online within timeout")
+	}
+
+	cap, err := cp.GetPDCapability(0, osdp.CapOutputControl)
+	if err != nil {
+		t.Fatalf("GetPDCapability: %v", err)
+	}
+	if cap.NumItems != 4 {
+		t.Errorf("advertised OutputControl NumItems = %d, want 4", cap.NumItems)
+	}
+}
