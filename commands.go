@@ -132,6 +132,14 @@ type CommandStatus struct {
 
 func (c CommandStatus) GetType() OsdpCommandType { return CmdStatus }
 
+// CommandTDSet sets the PD's local time and date.
+type CommandTDSet struct {
+	Year                             uint16
+	Month, Day, Hour, Minute, Second uint8
+}
+
+func (c CommandTDSet) GetType() OsdpCommandType { return CmdTDSet }
+
 // commandToC converts a Go Command to a newly malloc'd C osdp_cmd structure.
 // The caller owns the returned memory. It returns an error (and frees the
 // allocation) when a variable-length payload exceeds its C buffer.
@@ -197,6 +205,8 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 		C.set_cmd_comset(cCmd, C.uint8_t(cmdData.Address), C.uint32_t(cmdData.BaudRate))
 	case CommandFileTx:
 		C.set_cmd_file_tx(cCmd, C.int32_t(cmdData.ID), C.uint32_t(cmdData.Flags))
+	case CommandTDSet:
+		C.set_cmd_tdset(cCmd, C.uint16_t(cmdData.Year), C.uint8_t(cmdData.Month), C.uint8_t(cmdData.Day), C.uint8_t(cmdData.Hour), C.uint8_t(cmdData.Minute), C.uint8_t(cmdData.Second))
 	}
 
 	return cCmd, nil
@@ -314,6 +324,11 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 			ID:    int32(id),
 			Flags: uint32(flags),
 		}
+	case CmdTDSet:
+		var year C.uint16_t
+		var month, day, hour, minute, second C.uint8_t
+		C.get_cmd_tdset(cCmd, &year, &month, &day, &hour, &minute, &second)
+		commandData = CommandTDSet{Year: uint16(year), Month: uint8(month), Day: uint8(day), Hour: uint8(hour), Minute: uint8(minute), Second: uint8(second)}
 	default:
 		// For unknown commands, return a basic status command
 		commandData = CommandStatus{

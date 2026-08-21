@@ -236,6 +236,15 @@ static inline void get_cmd_output(struct osdp_cmd *cmd, uint8_t *output_no, uint
     *timer_count = cmd->output.timer_count;
 }
 
+static inline void set_cmd_tdset(struct osdp_cmd *cmd, uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute, uint8_t second) {
+    cmd->tdset.year = year; cmd->tdset.month = month; cmd->tdset.day = day;
+    cmd->tdset.hour = hour; cmd->tdset.minute = minute; cmd->tdset.second = second;
+}
+static inline void get_cmd_tdset(struct osdp_cmd *cmd, uint16_t *year, uint8_t *month, uint8_t *day, uint8_t *hour, uint8_t *minute, uint8_t *second) {
+    *year = cmd->tdset.year; *month = cmd->tdset.month; *day = cmd->tdset.day;
+    *hour = cmd->tdset.hour; *minute = cmd->tdset.minute; *second = cmd->tdset.second;
+}
+
 static inline void get_cmd_led(struct osdp_cmd *cmd, uint8_t *reader, uint8_t *led_number,
                         uint8_t *temp_control, uint8_t *temp_on_count, uint8_t *temp_off_count,
                         uint8_t *temp_on_color, uint8_t *temp_off_color, uint16_t *temp_timer,

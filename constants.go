@@ -75,6 +75,7 @@ const (
 	CmdMfg        OsdpCommandType = C.OSDP_CMD_MFG
 	CmdStatus     OsdpCommandType = C.OSDP_CMD_STATUS
 	CmdComsetDone OsdpCommandType = C.OSDP_CMD_COMSET_DONE
+	CmdTDSet      OsdpCommandType = C.OSDP_CMD_TDSET
 )
 
 // OsdpEventType represents OSDP event types

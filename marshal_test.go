@@ -56,6 +56,14 @@ func TestMfgCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTDSetRoundTrip(t *testing.T) {
+	in := CommandTDSet{Year: 2026, Month: 7, Day: 23, Hour: 14, Minute: 5, Second: 9}
+	got, ok := roundTripCommand(t, &Command{Command: in}).Command.(CommandTDSet)
+	if !ok || got != in {
+		t.Fatalf("round-trip = %+v, want %+v", got, in)
+	}
+}
+
 func TestEncodeAcceptsEmptyPayload(t *testing.T) {
 	got := roundTripCommand(t, &Command{Command: CommandMfg{VendorCode: [3]uint8{1, 2, 3}, Data: nil}})
 	mfg, ok := got.Command.(CommandMfg)
