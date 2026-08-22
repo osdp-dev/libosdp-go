@@ -87,6 +87,13 @@ const (
 	EvtMfgReply     OsdpEventType = C.OSDP_EVENT_MFGREP
 	EvtStatus       OsdpEventType = C.OSDP_EVENT_STATUS
 	EvtNotification OsdpEventType = C.OSDP_EVENT_NOTIFICATION
+	EvtMfgStatus    OsdpEventType = C.OSDP_EVENT_MFGSTATR
+	EvtMfgError     OsdpEventType = C.OSDP_EVENT_MFGERRR
+	EvtBioReadR     OsdpEventType = C.OSDP_EVENT_BIOREADR
+	EvtBioMatchR    OsdpEventType = C.OSDP_EVENT_BIOMATCHR
+	EvtPIVDataR     OsdpEventType = C.OSDP_EVENT_PIVDATAR
+	EvtGenAuthR     OsdpEventType = C.OSDP_EVENT_GENAUTHR
+	EvtCRAuthR      OsdpEventType = C.OSDP_EVENT_CRAUTHR
 )
 
 // PdCapabilityFunction represents PD capability function codes

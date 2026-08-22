@@ -56,6 +56,22 @@ func TestMfgCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMfgStatusEventsRoundTrip(t *testing.T) {
+	data := []byte{9, 8, 7, 6, 5}
+	statusEv := roundTripEvent(t, &Event{Event: EventMfgStatus{Data: data}})
+	got, ok := statusEv.Event.(EventMfgStatus)
+	if !ok {
+		t.Fatalf("status decoded as %T, want EventMfgStatus", statusEv.Event)
+	}
+	if !bytes.Equal(got.Data, data) {
+		t.Errorf("status data = %v, want %v", got.Data, data)
+	}
+	errEv := roundTripEvent(t, &Event{Event: EventMfgError{Data: data}})
+	if _, ok := errEv.Event.(EventMfgError); !ok {
+		t.Fatalf("error decoded as %T, want EventMfgError", errEv.Event)
+	}
+}
+
 func TestTDSetRoundTrip(t *testing.T) {
 	in := CommandTDSet{Year: 2026, Month: 7, Day: 23, Hour: 14, Minute: 5, Second: 9}
 	got, ok := roundTripCommand(t, &Command{Command: in}).Command.(CommandTDSet)

@@ -229,6 +229,20 @@ static inline void set_event_mfgrep(struct osdp_event *ev, uint32_t vendor_code,
     if (length) memcpy(ev->mfgrep.data, data, length);
 }
 
+// MFGSTATR and MFGERRR share struct osdp_event_mfgstat on distinct union arms.
+static inline void set_event_mfgstat_arm(struct osdp_event_mfgstat *m, uint8_t length, uint8_t *data) {
+    m->length = length;
+    if (length) memcpy(m->data, data, length);
+}
+static inline void get_event_mfgstat_arm(struct osdp_event_mfgstat *m, uint8_t *length, uint8_t *data) {
+    *length = m->length;
+    if (m->length) memcpy(data, m->data, m->length);
+}
+static inline void set_event_mfgstatr(struct osdp_event *ev, uint8_t length, uint8_t *data) { set_event_mfgstat_arm(&ev->mfgstatr, length, data); }
+static inline void get_event_mfgstatr(struct osdp_event *ev, uint8_t *length, uint8_t *data) { get_event_mfgstat_arm(&ev->mfgstatr, length, data); }
+static inline void set_event_mfgerrr(struct osdp_event *ev, uint8_t length, uint8_t *data) { set_event_mfgstat_arm(&ev->mfgerrr, length, data); }
+static inline void get_event_mfgerrr(struct osdp_event *ev, uint8_t *length, uint8_t *data) { get_event_mfgstat_arm(&ev->mfgerrr, length, data); }
+
 // Command parsing helper functions
 static inline void get_cmd_output(struct osdp_cmd *cmd, uint8_t *output_no, uint8_t *control_code, uint16_t *timer_count) {
     *output_no = cmd->output.output_no;

@@ -119,6 +119,18 @@ type EventMfgReply struct {
 
 func (e EventMfgReply) GetType() OsdpEventType { return EvtMfgReply }
 
+// EventMfgStatus is a manufacturer-specific status reply (MFGSTATR). Data is at
+// most OSDP_EVENT_MFGSTAT_MAX_DATALEN bytes.
+type EventMfgStatus struct{ Data []byte }
+
+func (e EventMfgStatus) GetType() OsdpEventType { return EvtMfgStatus }
+
+// EventMfgError is a manufacturer-specific error reply (MFGERRR). Data is at
+// most OSDP_EVENT_MFGSTAT_MAX_DATALEN bytes.
+type EventMfgError struct{ Data []byte }
+
+func (e EventMfgError) GetType() OsdpEventType { return EvtMfgError }
+
 // eventToC converts a Go Event to a newly malloc'd C osdp_event structure. The
 // caller owns the returned memory.
 func eventToC(event *Event) (*C.struct_osdp_event, error) {
@@ -196,6 +208,28 @@ func eventToC(event *Event) (*C.struct_osdp_event, error) {
 		}
 		vendorCode := uint32(eventData.VendorCode[0]) | uint32(eventData.VendorCode[1])<<8 | uint32(eventData.VendorCode[2])<<16
 		C.set_event_mfgrep(cEvent, C.uint32_t(vendorCode), C.uint8_t(len(eventData.Data)), mfgPtr)
+
+	case EventMfgStatus:
+		if err := checkLen("mfgstatr", len(eventData.Data), C.OSDP_EVENT_MFGSTAT_MAX_DATALEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(eventData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
+		}
+		C.set_event_mfgstatr(cEvent, C.uint8_t(len(eventData.Data)), p)
+
+	case EventMfgError:
+		if err := checkLen("mfgerrr", len(eventData.Data), C.OSDP_EVENT_MFGSTAT_MAX_DATALEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(eventData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
+		}
+		C.set_event_mfgerrr(cEvent, C.uint8_t(len(eventData.Data)), p)
 	}
 
 	return cEvent, nil
@@ -248,6 +282,16 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			VendorCode: vendorArray,
 			Data:       C.GoBytes(unsafe.Pointer(&mfgData[0]), C.int(length)),
 		}
+	case EvtMfgStatus:
+		var length C.uint8_t
+		buf := make([]C.uint8_t, C.OSDP_EVENT_MFGSTAT_MAX_DATALEN)
+		C.get_event_mfgstatr(cEvent, &length, &buf[0])
+		eventData = EventMfgStatus{Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case EvtMfgError:
+		var length C.uint8_t
+		buf := make([]C.uint8_t, C.OSDP_EVENT_MFGSTAT_MAX_DATALEN)
+		C.get_event_mfgerrr(cEvent, &length, &buf[0])
+		eventData = EventMfgError{Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
 	case EvtStatus:
 		var reportType, nrEntries C.uint8_t
 		statusReport := make([]C.uint8_t, C.OSDP_STATUS_REPORT_MAX_LEN)
