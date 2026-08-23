@@ -260,6 +260,23 @@ static inline void get_event_biomatchr(struct osdp_event *ev, uint8_t *reader, i
     *reader = ev->biomatchr.reader; *status = ev->biomatchr.status; *score = ev->biomatchr.score;
 }
 
+static inline void set_cmd_bioread(struct osdp_cmd *cmd, uint8_t reader, int type, int format, uint8_t quality) {
+    cmd->bioread.reader = reader; cmd->bioread.type = type; cmd->bioread.format = format; cmd->bioread.quality = quality;
+}
+static inline void get_cmd_bioread(struct osdp_cmd *cmd, uint8_t *reader, int *type, int *format, uint8_t *quality) {
+    *reader = cmd->bioread.reader; *type = cmd->bioread.type; *format = cmd->bioread.format; *quality = cmd->bioread.quality;
+}
+static inline void set_event_bioreadr(struct osdp_event *ev, uint8_t reader, int status, int type, uint8_t quality, uint16_t length, uint8_t *data) {
+    ev->bioreadr.reader = reader; ev->bioreadr.status = status; ev->bioreadr.type = type;
+    ev->bioreadr.quality = quality; ev->bioreadr.length = length;
+    if (length) memcpy(ev->bioreadr.data, data, length);
+}
+static inline void get_event_bioreadr(struct osdp_event *ev, uint8_t *reader, int *status, int *type, uint8_t *quality, uint16_t *length, uint8_t *data) {
+    *reader = ev->bioreadr.reader; *status = ev->bioreadr.status; *type = ev->bioreadr.type;
+    *quality = ev->bioreadr.quality; *length = ev->bioreadr.length;
+    if (ev->bioreadr.length) memcpy(data, ev->bioreadr.data, ev->bioreadr.length);
+}
+
 // Command parsing helper functions
 static inline void get_cmd_output(struct osdp_cmd *cmd, uint8_t *output_no, uint8_t *control_code, uint16_t *timer_count) {
     *output_no = cmd->output.output_no;

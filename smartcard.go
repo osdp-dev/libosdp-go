@@ -80,3 +80,27 @@ type EventBioMatchR struct {
 }
 
 func (e EventBioMatchR) GetType() OsdpEventType { return EvtBioMatchR }
+
+// CommandBioRead asks the PD to scan a biometric and return it in a
+// EventBioReadR. Large templates require FlagBioReadRMultipart on both roles.
+type CommandBioRead struct {
+	Reader  uint8
+	Type    BiometricType
+	Format  BiometricFormat
+	Quality uint8
+}
+
+func (c CommandBioRead) GetType() OsdpCommandType { return CmdBioRead }
+
+// EventBioReadR is the reply to a CommandBioRead. The remaining fields are valid
+// only when Status is BioStatusSuccess. Data holds the template/image (at most
+// OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN bytes).
+type EventBioReadR struct {
+	Reader  uint8
+	Status  BiometricStatus
+	Type    BiometricType
+	Quality uint8
+	Data    []byte
+}
+
+func (e EventBioReadR) GetType() OsdpEventType { return EvtBioReadR }

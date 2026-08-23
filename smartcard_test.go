@@ -35,3 +35,23 @@ func TestBioMatchRoundTrip(t *testing.T) {
 		t.Fatalf("event round-trip = %+v, want %+v", gotEv, ev)
 	}
 }
+
+func TestBioReadRoundTrip(t *testing.T) {
+	cmd := CommandBioRead{Reader: 2, Type: BioTypeFullFaceImage, Format: BioFmtRawPGM, Quality: 128}
+	got, ok := roundTripCommand(t, &Command{Command: cmd}).Command.(CommandBioRead)
+	if !ok || got != cmd {
+		t.Fatalf("cmd = %+v, want %+v", got, cmd)
+	}
+	big := make([]byte, 256) // == OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN
+	for i := range big {
+		big[i] = byte(i)
+	}
+	ev := EventBioReadR{Reader: 2, Status: BioStatusSuccess, Type: BioTypeFullFaceImage, Quality: 250, Data: big}
+	gotEv, ok := roundTripEvent(t, &Event{Event: ev}).Event.(EventBioReadR)
+	if !ok || gotEv.Reader != ev.Reader || gotEv.Status != ev.Status || gotEv.Type != ev.Type || gotEv.Quality != ev.Quality || !bytes.Equal(gotEv.Data, big) {
+		t.Fatalf("event data mismatch len=%d", len(gotEv.Data))
+	}
+	if FlagBioReadRMultipart != 0x00400000 {
+		t.Errorf("FlagBioReadRMultipart = %#x", uint32(FlagBioReadRMultipart))
+	}
+}

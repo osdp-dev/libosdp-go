@@ -217,6 +217,8 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 			p = (*C.uint8_t)(unsafe.Pointer(&cmdData.Data[0]))
 		}
 		C.set_cmd_biomatch(cCmd, C.uint8_t(cmdData.Reader), C.int(cmdData.Type), C.int(cmdData.Format), C.uint8_t(cmdData.Quality), C.uint16_t(len(cmdData.Data)), p)
+	case CommandBioRead:
+		C.set_cmd_bioread(cCmd, C.uint8_t(cmdData.Reader), C.int(cmdData.Type), C.int(cmdData.Format), C.uint8_t(cmdData.Quality))
 	}
 
 	return cCmd, nil
@@ -346,6 +348,11 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		buf := make([]C.uint8_t, C.OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN)
 		C.get_cmd_biomatch(cCmd, &reader, &typ, &format, &quality, &length, &buf[0])
 		commandData = CommandBioMatch{Reader: uint8(reader), Type: BiometricType(typ), Format: BiometricFormat(format), Quality: uint8(quality), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case CmdBioRead:
+		var reader, quality C.uint8_t
+		var typ, format C.int
+		C.get_cmd_bioread(cCmd, &reader, &typ, &format, &quality)
+		commandData = CommandBioRead{Reader: uint8(reader), Type: BiometricType(typ), Format: BiometricFormat(format), Quality: uint8(quality)}
 	default:
 		// For unknown commands, return a basic status command
 		commandData = CommandStatus{

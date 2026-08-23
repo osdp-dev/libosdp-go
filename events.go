@@ -233,6 +233,17 @@ func eventToC(event *Event) (*C.struct_osdp_event, error) {
 
 	case EventBioMatchR:
 		C.set_event_biomatchr(cEvent, C.uint8_t(eventData.Reader), C.int(eventData.Status), C.uint8_t(eventData.Score))
+
+	case EventBioReadR:
+		if err := checkLen("bioreadr", len(eventData.Data), C.OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(eventData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
+		}
+		C.set_event_bioreadr(cEvent, C.uint8_t(eventData.Reader), C.int(eventData.Status), C.int(eventData.Type), C.uint8_t(eventData.Quality), C.uint16_t(len(eventData.Data)), p)
 	}
 
 	return cEvent, nil
@@ -300,6 +311,13 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 		var status C.int
 		C.get_event_biomatchr(cEvent, &reader, &status, &score)
 		eventData = EventBioMatchR{Reader: uint8(reader), Status: BiometricStatus(status), Score: uint8(score)}
+	case EvtBioReadR:
+		var reader, quality C.uint8_t
+		var status, typ C.int
+		var length C.uint16_t
+		buf := make([]C.uint8_t, C.OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN)
+		C.get_event_bioreadr(cEvent, &reader, &status, &typ, &quality, &length, &buf[0])
+		eventData = EventBioReadR{Reader: uint8(reader), Status: BiometricStatus(status), Type: BiometricType(typ), Quality: uint8(quality), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
 	case EvtStatus:
 		var reportType, nrEntries C.uint8_t
 		statusReport := make([]C.uint8_t, C.OSDP_STATUS_REPORT_MAX_LEN)

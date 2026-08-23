@@ -21,6 +21,7 @@ const (
 	FlagEnableNotification           OsdpFlag = C.OSDP_FLAG_ENABLE_NOTIFICATION
 	FlagCapturePackets               OsdpFlag = C.OSDP_FLAG_CAPTURE_PACKETS
 	FlagAllowEmptyEncryptedDataBlock OsdpFlag = C.OSDP_FLAG_ALLOW_EMPTY_ENCRYPTED_DATA_BLOCK
+	FlagBioReadRMultipart            OsdpFlag = C.OSDP_FLAG_BIOREADR_MULTIPART
 )
 
 // LogLevel represents OSDP log levels
