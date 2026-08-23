@@ -104,3 +104,18 @@ type EventBioReadR struct {
 }
 
 func (e EventBioReadR) GetType() OsdpEventType { return EvtBioReadR }
+
+// CommandPIVData requests PIV object data by OID, element, and offset.
+type CommandPIVData struct {
+	OID     [3]byte
+	Element uint8
+	Offset  uint8
+}
+
+func (c CommandPIVData) GetType() OsdpCommandType { return CmdPIVData }
+
+// EventPIVData is a smartcard/PIV reply (PIVDATAR), reassembled from the
+// multipart transfer. Data is at most OSDP_PIV_DATA_MAX_LEN bytes.
+type EventPIVData struct{ Data []byte }
+
+func (e EventPIVData) GetType() OsdpEventType { return EvtPIVDataR }

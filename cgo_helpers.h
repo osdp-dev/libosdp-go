@@ -277,6 +277,25 @@ static inline void get_event_bioreadr(struct osdp_event *ev, uint8_t *reader, in
     if (ev->bioreadr.length) memcpy(data, ev->bioreadr.data, ev->bioreadr.length);
 }
 
+static inline void set_cmd_pivdata(struct osdp_cmd *cmd, uint8_t *oid, uint8_t element, uint8_t offset) {
+    cmd->pivdata.oid[0] = oid[0]; cmd->pivdata.oid[1] = oid[1]; cmd->pivdata.oid[2] = oid[2];
+    cmd->pivdata.element = element; cmd->pivdata.offset = offset;
+}
+static inline void get_cmd_pivdata(struct osdp_cmd *cmd, uint8_t *oid, uint8_t *element, uint8_t *offset) {
+    oid[0] = cmd->pivdata.oid[0]; oid[1] = cmd->pivdata.oid[1]; oid[2] = cmd->pivdata.oid[2];
+    *element = cmd->pivdata.element; *offset = cmd->pivdata.offset;
+}
+
+// piv_reply backs PIVDATAR, GENAUTHR, and CRAUTHR; the event id distinguishes.
+static inline void set_event_piv_reply(struct osdp_event *ev, uint16_t length, uint8_t *data) {
+    ev->piv_reply.length = length;
+    if (length) memcpy(ev->piv_reply.data, data, length);
+}
+static inline void get_event_piv_reply(struct osdp_event *ev, uint16_t *length, uint8_t *data) {
+    *length = ev->piv_reply.length;
+    if (ev->piv_reply.length) memcpy(data, ev->piv_reply.data, ev->piv_reply.length);
+}
+
 // Command parsing helper functions
 static inline void get_cmd_output(struct osdp_cmd *cmd, uint8_t *output_no, uint8_t *control_code, uint16_t *timer_count) {
     *output_no = cmd->output.output_no;

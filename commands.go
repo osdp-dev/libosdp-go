@@ -219,6 +219,9 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 		C.set_cmd_biomatch(cCmd, C.uint8_t(cmdData.Reader), C.int(cmdData.Type), C.int(cmdData.Format), C.uint8_t(cmdData.Quality), C.uint16_t(len(cmdData.Data)), p)
 	case CommandBioRead:
 		C.set_cmd_bioread(cCmd, C.uint8_t(cmdData.Reader), C.int(cmdData.Type), C.int(cmdData.Format), C.uint8_t(cmdData.Quality))
+	case CommandPIVData:
+		oid := [3]C.uint8_t{C.uint8_t(cmdData.OID[0]), C.uint8_t(cmdData.OID[1]), C.uint8_t(cmdData.OID[2])}
+		C.set_cmd_pivdata(cCmd, &oid[0], C.uint8_t(cmdData.Element), C.uint8_t(cmdData.Offset))
 	}
 
 	return cCmd, nil
@@ -353,6 +356,11 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		var typ, format C.int
 		C.get_cmd_bioread(cCmd, &reader, &typ, &format, &quality)
 		commandData = CommandBioRead{Reader: uint8(reader), Type: BiometricType(typ), Format: BiometricFormat(format), Quality: uint8(quality)}
+	case CmdPIVData:
+		var oid [3]C.uint8_t
+		var element, offset C.uint8_t
+		C.get_cmd_pivdata(cCmd, &oid[0], &element, &offset)
+		commandData = CommandPIVData{OID: [3]byte{byte(oid[0]), byte(oid[1]), byte(oid[2])}, Element: uint8(element), Offset: uint8(offset)}
 	default:
 		// For unknown commands, return a basic status command
 		commandData = CommandStatus{

@@ -55,3 +55,20 @@ func TestBioReadRoundTrip(t *testing.T) {
 		t.Errorf("FlagBioReadRMultipart = %#x", uint32(FlagBioReadRMultipart))
 	}
 }
+
+func TestPIVDataRoundTrip(t *testing.T) {
+	cmd := CommandPIVData{OID: [3]byte{0x5F, 0xC1, 0x02}, Element: 0x01, Offset: 0}
+	got, ok := roundTripCommand(t, &Command{Command: cmd}).Command.(CommandPIVData)
+	if !ok || got != cmd {
+		t.Fatalf("cmd = %+v, want %+v", got, cmd)
+	}
+	big := make([]byte, 256)
+	for i := range big {
+		big[i] = byte(255 - i%256)
+	}
+	ev := EventPIVData{Data: big}
+	gotEv, ok := roundTripEvent(t, &Event{Event: ev}).Event.(EventPIVData)
+	if !ok || !bytes.Equal(gotEv.Data, big) {
+		t.Fatalf("piv reply len=%d", len(gotEv.Data))
+	}
+}
