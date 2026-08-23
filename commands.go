@@ -207,6 +207,16 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 		C.set_cmd_file_tx(cCmd, C.int32_t(cmdData.ID), C.uint32_t(cmdData.Flags))
 	case CommandTDSet:
 		C.set_cmd_tdset(cCmd, C.uint16_t(cmdData.Year), C.uint8_t(cmdData.Month), C.uint8_t(cmdData.Day), C.uint8_t(cmdData.Hour), C.uint8_t(cmdData.Minute), C.uint8_t(cmdData.Second))
+	case CommandBioMatch:
+		if err := checkLen("biomatch", len(cmdData.Data), C.OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(cmdData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&cmdData.Data[0]))
+		}
+		C.set_cmd_biomatch(cCmd, C.uint8_t(cmdData.Reader), C.int(cmdData.Type), C.int(cmdData.Format), C.uint8_t(cmdData.Quality), C.uint16_t(len(cmdData.Data)), p)
 	}
 
 	return cCmd, nil
@@ -329,6 +339,13 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		var month, day, hour, minute, second C.uint8_t
 		C.get_cmd_tdset(cCmd, &year, &month, &day, &hour, &minute, &second)
 		commandData = CommandTDSet{Year: uint16(year), Month: uint8(month), Day: uint8(day), Hour: uint8(hour), Minute: uint8(minute), Second: uint8(second)}
+	case CmdBioMatch:
+		var reader, quality C.uint8_t
+		var typ, format C.int
+		var length C.uint16_t
+		buf := make([]C.uint8_t, C.OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN)
+		C.get_cmd_biomatch(cCmd, &reader, &typ, &format, &quality, &length, &buf[0])
+		commandData = CommandBioMatch{Reader: uint8(reader), Type: BiometricType(typ), Format: BiometricFormat(format), Quality: uint8(quality), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
 	default:
 		// For unknown commands, return a basic status command
 		commandData = CommandStatus{

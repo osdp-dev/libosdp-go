@@ -230,6 +230,9 @@ func eventToC(event *Event) (*C.struct_osdp_event, error) {
 			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
 		}
 		C.set_event_mfgerrr(cEvent, C.uint8_t(len(eventData.Data)), p)
+
+	case EventBioMatchR:
+		C.set_event_biomatchr(cEvent, C.uint8_t(eventData.Reader), C.int(eventData.Status), C.uint8_t(eventData.Score))
 	}
 
 	return cEvent, nil
@@ -292,6 +295,11 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 		buf := make([]C.uint8_t, C.OSDP_EVENT_MFGSTAT_MAX_DATALEN)
 		C.get_event_mfgerrr(cEvent, &length, &buf[0])
 		eventData = EventMfgError{Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case EvtBioMatchR:
+		var reader, score C.uint8_t
+		var status C.int
+		C.get_event_biomatchr(cEvent, &reader, &status, &score)
+		eventData = EventBioMatchR{Reader: uint8(reader), Status: BiometricStatus(status), Score: uint8(score)}
 	case EvtStatus:
 		var reportType, nrEntries C.uint8_t
 		statusReport := make([]C.uint8_t, C.OSDP_STATUS_REPORT_MAX_LEN)

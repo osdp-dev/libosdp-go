@@ -76,6 +76,11 @@ const (
 	CmdStatus     OsdpCommandType = C.OSDP_CMD_STATUS
 	CmdComsetDone OsdpCommandType = C.OSDP_CMD_COMSET_DONE
 	CmdTDSet      OsdpCommandType = C.OSDP_CMD_TDSET
+	CmdBioRead    OsdpCommandType = C.OSDP_CMD_BIOREAD
+	CmdBioMatch   OsdpCommandType = C.OSDP_CMD_BIOMATCH
+	CmdPIVData    OsdpCommandType = C.OSDP_CMD_PIVDATA
+	CmdGenAuth    OsdpCommandType = C.OSDP_CMD_GENAUTH
+	CmdCRAuth     OsdpCommandType = C.OSDP_CMD_CRAUTH
 )
 
 // OsdpEventType represents OSDP event types

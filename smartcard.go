@@ -58,3 +58,25 @@ const (
 	BioStatusTimeout      BiometricStatus = C.OSDP_BIO_STATUS_TIMEOUT
 	BioStatusUnknownError BiometricStatus = C.OSDP_BIO_STATUS_UNKNOWN_ERROR
 )
+
+// CommandBioMatch asks the PD to scan and match against an attached template.
+// Data holds the template (at most OSDP_CMD_BIOMATCH_MAX_TEMPLATE_LEN bytes).
+type CommandBioMatch struct {
+	Reader  uint8
+	Type    BiometricType
+	Format  BiometricFormat
+	Quality uint8
+	Data    []byte
+}
+
+func (c CommandBioMatch) GetType() OsdpCommandType { return CmdBioMatch }
+
+// EventBioMatchR is the reply to a CommandBioMatch. Score is valid only when
+// Status is BioStatusSuccess.
+type EventBioMatchR struct {
+	Reader uint8
+	Status BiometricStatus
+	Score  uint8
+}
+
+func (e EventBioMatchR) GetType() OsdpEventType { return EvtBioMatchR }
