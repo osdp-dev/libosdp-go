@@ -296,6 +296,16 @@ static inline void get_event_piv_reply(struct osdp_event *ev, uint16_t *length, 
     if (ev->piv_reply.length) memcpy(data, ev->piv_reply.data, ev->piv_reply.length);
 }
 
+// GENAUTH and CRAUTH share struct osdp_cmd_auth; the command id distinguishes.
+static inline void set_cmd_auth(struct osdp_cmd *cmd, uint8_t algorithm, uint8_t key, uint16_t length, uint8_t *data) {
+    cmd->auth.algorithm = algorithm; cmd->auth.key = key; cmd->auth.length = length;
+    if (length) memcpy(cmd->auth.data, data, length);
+}
+static inline void get_cmd_auth(struct osdp_cmd *cmd, uint8_t *algorithm, uint8_t *key, uint16_t *length, uint8_t *data) {
+    *algorithm = cmd->auth.algorithm; *key = cmd->auth.key; *length = cmd->auth.length;
+    if (cmd->auth.length) memcpy(data, cmd->auth.data, cmd->auth.length);
+}
+
 // Command parsing helper functions
 static inline void get_cmd_output(struct osdp_cmd *cmd, uint8_t *output_no, uint8_t *control_code, uint16_t *timer_count) {
     *output_no = cmd->output.output_no;

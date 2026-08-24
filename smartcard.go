@@ -119,3 +119,35 @@ func (c CommandPIVData) GetType() OsdpCommandType { return CmdPIVData }
 type EventPIVData struct{ Data []byte }
 
 func (e EventPIVData) GetType() OsdpEventType { return EvtPIVDataR }
+
+// CommandGenAuth carries a general authenticate challenge. Data is at most
+// OSDP_PIV_DATA_MAX_LEN bytes.
+type CommandGenAuth struct {
+	Algorithm uint8
+	Key       uint8
+	Data      []byte
+}
+
+func (c CommandGenAuth) GetType() OsdpCommandType { return CmdGenAuth }
+
+// CommandCRAuth carries a challenge/response authenticate challenge. Data is at
+// most OSDP_PIV_DATA_MAX_LEN bytes.
+type CommandCRAuth struct {
+	Algorithm uint8
+	Key       uint8
+	Data      []byte
+}
+
+func (c CommandCRAuth) GetType() OsdpCommandType { return CmdCRAuth }
+
+// EventGenAuthReply is the reply to a CommandGenAuth (GENAUTHR). Data is at most
+// OSDP_PIV_DATA_MAX_LEN bytes.
+type EventGenAuthReply struct{ Data []byte }
+
+func (e EventGenAuthReply) GetType() OsdpEventType { return EvtGenAuthR }
+
+// EventCRAuthReply is the reply to a CommandCRAuth (CRAUTHR). Data is at most
+// OSDP_PIV_DATA_MAX_LEN bytes.
+type EventCRAuthReply struct{ Data []byte }
+
+func (e EventCRAuthReply) GetType() OsdpEventType { return EvtCRAuthR }

@@ -72,3 +72,21 @@ func TestPIVDataRoundTrip(t *testing.T) {
 		t.Fatalf("piv reply len=%d", len(gotEv.Data))
 	}
 }
+
+func TestAuthRoundTrip(t *testing.T) {
+	chal := bytes.Repeat([]byte{0x5A}, 200)
+	gen, ok := roundTripCommand(t, &Command{Command: CommandGenAuth{Algorithm: 1, Key: 2, Data: chal}}).Command.(CommandGenAuth)
+	if !ok || gen.Algorithm != 1 || gen.Key != 2 || !bytes.Equal(gen.Data, chal) {
+		t.Fatalf("genauth cmd = %+v", gen)
+	}
+	if _, ok := roundTripCommand(t, &Command{Command: CommandCRAuth{Algorithm: 3, Key: 4, Data: chal}}).Command.(CommandCRAuth); !ok {
+		t.Fatal("crauth cmd decoded to wrong type")
+	}
+	reply := bytes.Repeat([]byte{0xC3}, 256)
+	if g, ok := roundTripEvent(t, &Event{Event: EventGenAuthReply{Data: reply}}).Event.(EventGenAuthReply); !ok || !bytes.Equal(g.Data, reply) {
+		t.Fatal("genauthr reply wrong type/data")
+	}
+	if _, ok := roundTripEvent(t, &Event{Event: EventCRAuthReply{Data: reply}}).Event.(EventCRAuthReply); !ok {
+		t.Fatal("crauthr reply decoded to wrong type")
+	}
+}

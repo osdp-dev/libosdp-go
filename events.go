@@ -255,6 +255,28 @@ func eventToC(event *Event) (*C.struct_osdp_event, error) {
 			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
 		}
 		C.set_event_piv_reply(cEvent, C.uint16_t(len(eventData.Data)), p)
+
+	case EventGenAuthReply:
+		if err := checkLen("genauthr", len(eventData.Data), C.OSDP_PIV_DATA_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(eventData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
+		}
+		C.set_event_piv_reply(cEvent, C.uint16_t(len(eventData.Data)), p)
+
+	case EventCRAuthReply:
+		if err := checkLen("crauthr", len(eventData.Data), C.OSDP_PIV_DATA_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(eventData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&eventData.Data[0]))
+		}
+		C.set_event_piv_reply(cEvent, C.uint16_t(len(eventData.Data)), p)
 	}
 
 	return cEvent, nil
@@ -334,6 +356,16 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
 		C.get_event_piv_reply(cEvent, &length, &buf[0])
 		eventData = EventPIVData{Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case EvtGenAuthR:
+		var length C.uint16_t
+		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
+		C.get_event_piv_reply(cEvent, &length, &buf[0])
+		eventData = EventGenAuthReply{Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case EvtCRAuthR:
+		var length C.uint16_t
+		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
+		C.get_event_piv_reply(cEvent, &length, &buf[0])
+		eventData = EventCRAuthReply{Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
 	case EvtStatus:
 		var reportType, nrEntries C.uint8_t
 		statusReport := make([]C.uint8_t, C.OSDP_STATUS_REPORT_MAX_LEN)

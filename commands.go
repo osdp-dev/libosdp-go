@@ -222,6 +222,26 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 	case CommandPIVData:
 		oid := [3]C.uint8_t{C.uint8_t(cmdData.OID[0]), C.uint8_t(cmdData.OID[1]), C.uint8_t(cmdData.OID[2])}
 		C.set_cmd_pivdata(cCmd, &oid[0], C.uint8_t(cmdData.Element), C.uint8_t(cmdData.Offset))
+	case CommandGenAuth:
+		if err := checkLen("genauth", len(cmdData.Data), C.OSDP_PIV_DATA_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(cmdData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&cmdData.Data[0]))
+		}
+		C.set_cmd_auth(cCmd, C.uint8_t(cmdData.Algorithm), C.uint8_t(cmdData.Key), C.uint16_t(len(cmdData.Data)), p)
+	case CommandCRAuth:
+		if err := checkLen("crauth", len(cmdData.Data), C.OSDP_PIV_DATA_MAX_LEN); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
+		var p *C.uint8_t
+		if len(cmdData.Data) > 0 {
+			p = (*C.uint8_t)(unsafe.Pointer(&cmdData.Data[0]))
+		}
+		C.set_cmd_auth(cCmd, C.uint8_t(cmdData.Algorithm), C.uint8_t(cmdData.Key), C.uint16_t(len(cmdData.Data)), p)
 	}
 
 	return cCmd, nil
@@ -361,6 +381,18 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		var element, offset C.uint8_t
 		C.get_cmd_pivdata(cCmd, &oid[0], &element, &offset)
 		commandData = CommandPIVData{OID: [3]byte{byte(oid[0]), byte(oid[1]), byte(oid[2])}, Element: uint8(element), Offset: uint8(offset)}
+	case CmdGenAuth:
+		var algorithm, key C.uint8_t
+		var length C.uint16_t
+		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
+		C.get_cmd_auth(cCmd, &algorithm, &key, &length, &buf[0])
+		commandData = CommandGenAuth{Algorithm: uint8(algorithm), Key: uint8(key), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case CmdCRAuth:
+		var algorithm, key C.uint8_t
+		var length C.uint16_t
+		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
+		C.get_cmd_auth(cCmd, &algorithm, &key, &length, &buf[0])
+		commandData = CommandCRAuth{Algorithm: uint8(algorithm), Key: uint8(key), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
 	default:
 		// For unknown commands, return a basic status command
 		commandData = CommandStatus{
