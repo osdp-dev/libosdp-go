@@ -22,4 +22,8 @@ const (
 	driftCardFmtSentinel  = int(C.OSDP_CARD_FMT_SENTINEL)
 	driftNotificationLast = int(C.OSDP_NOTIFICATION_MP_DONE)
 	driftStatusReportLast = int(C.OSDP_STATUS_REPORT_READER)
+	driftBioTypeSentinel  = int(C.OSDP_BIO_TYPE_SENTINEL)
+	driftBioFmtSentinel   = int(C.OSDP_BIO_FMT_SENTINEL)
+	driftBioStatusMax     = int(C.OSDP_BIO_STATUS_UNKNOWN_ERROR) // non-sequential (0,1,0xFF)
+	driftMPMsgLast        = int(C.OSDP_MP_MSG_BIOREAD)           // sentinel-less, last member
 )

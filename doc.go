@@ -37,6 +37,17 @@ Two main types: ControlPanel (one bus, one or more PDs) and PeripheralDevice
 For a runnable PD example, a complete CP↔PD walkthrough, and patterns for
 multi-drop buses, see the examples/ tree in the repository.
 
+# Commands and Events
+
+The core command and event types live in commands.go and events.go. The
+biometric, PIV, and smartcard-authentication surface — CommandBioRead,
+CommandBioMatch, CommandPIVData, CommandGenAuth, CommandCRAuth and their reply
+events (EventBioReadR, EventBioMatchR, EventPIVData, EventGenAuthReply,
+EventCRAuthReply) — lives in smartcard.go. libosdp reassembles the multipart
+replies transparently; set FlagBioReadRMultipart on both roles for oversized
+biometric templates. Notifications carry a typed Payload (see EventNotification
+and NotificationData).
+
 # Channels
 
 Implement the Channel interface to wrap any transport. NewSerialChannel and
