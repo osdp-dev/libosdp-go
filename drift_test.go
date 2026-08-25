@@ -41,10 +41,10 @@ const (
 	// ASCII, SENTINEL).
 	expectedCardFmtSentinel = 3
 
-	// osdp_notification_type last member ordinal (no sentinel): MP_DONE.
-	// Catches an insert before MP_DONE, NOT a member appended after it (C has
-	// no sentinel to bump); the robust fix is an upstream sentinel.
-	expectedNotificationLast = 5
+	// osdp_notification_type last member ordinal (no sentinel): PD_ID (appended
+	// after MP_DONE). Catches an insert before PD_ID, NOT a member appended after
+	// it (C has no sentinel to bump); the robust fix is an upstream sentinel.
+	expectedNotificationLast = 6
 
 	// osdp_status_report_type last member ordinal (no sentinel): READER.
 	// Catches an insert before READER, NOT a member appended after it (C has
@@ -84,7 +84,7 @@ func TestEnumDrift(t *testing.T) {
 			"a capability code was added upstream; bind it in constants.go or bump expectedPdCapSentinel"},
 		{"osdp_card_format (OSDP_CARD_FMT_SENTINEL)", driftCardFmtSentinel, expectedCardFmtSentinel,
 			"a card format was added upstream; bind it in constants.go or bump expectedCardFmtSentinel"},
-		{"osdp_notification_type (last=MP_DONE)", driftNotificationLast, expectedNotificationLast,
+		{"osdp_notification_type (last=PD_ID)", driftNotificationLast, expectedNotificationLast,
 			"a notification type was inserted upstream; update constants.go and the notification union decode, then bump expectedNotificationLast"},
 		{"osdp_status_report_type (last=READER)", driftStatusReportLast, expectedStatusReportLast,
 			"a status report type was inserted upstream; update constants.go then bump expectedStatusReportLast"},

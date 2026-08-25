@@ -57,8 +57,15 @@ func buildNotificationPDStatus(online bool) *C.struct_osdp_event {
 	return e
 }
 
-func buildNotificationMP(ntype NotificationType, mpType MPMsgType, objectID int, total, offset uint32, outcome FileTxOutcome) *C.struct_osdp_event {
+func buildNotificationMP(ntype NotificationType, mpType MPMsgType, objectID int, total, offset uint32, outcome MPOutcome) *C.struct_osdp_event {
 	e := newCNotificationEvent()
 	C.set_notification_mp(e, C.int(ntype), C.enum_osdp_mp_msg_type(mpType), C.int(objectID), C.uint32_t(total), C.uint32_t(offset), C.int(outcome))
+	return e
+}
+
+func buildNotificationPDID(id PdId) *C.struct_osdp_event {
+	e := newCNotificationEvent()
+	fw := (id.FirmwareMajor << 16) | (id.FirmwareMinor << 8) | id.FirmwareBuild
+	C.set_notification_pd_id(e, C.int(id.Version), C.int(id.Model), C.uint(id.VendorCode), C.uint(id.SerialNumber), C.uint(fw))
 	return e
 }

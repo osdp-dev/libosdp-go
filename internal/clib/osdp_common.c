@@ -15,6 +15,9 @@
 #include "osdp_common.h"
 #include "osdp_multipart.h"
 #include "osdp_metrics.h"
+#include "osdp_file.h"
+#include "osdp_piv.h"
+#include "osdp_bio.h"
 
 #include <utils/crc16.h>
 
@@ -441,7 +444,7 @@ void osdp_get_status_mask(const osdp_t *ctx, uint8_t *bitmask)
 			*mask = 0;
 		}
 		pd = osdp_to_pd(ctx, i);
-		if (pd->state == OSDP_CP_STATE_ONLINE) {
+		if (cp_is_online(pd)) {
 			*mask |= 1 << pos;
 		}
 	}
@@ -489,4 +492,17 @@ void osdp_mp_pd_notify(void *arg, enum osdp_mp_phase phase,
 		(void)pd->command_callback(pd->command_callback_arg, &cmd);
 	}
 	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
+}
+
+void osdp_engines_abort(struct osdp_pd *pd)
+{
+	osdp_file_tx_abort(pd);
+	osdp_piv_abort(pd);
+	osdp_bio_abort(pd);
+}
+
+bool osdp_mp_engine_busy(struct osdp_pd *pd)
+{
+	return osdp_file_tx_is_active(pd) || osdp_piv_is_active(pd) ||
+	       osdp_bio_is_active(pd);
 }

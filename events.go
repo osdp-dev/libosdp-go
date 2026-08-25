@@ -106,10 +106,20 @@ type NotificationMP struct {
 	ObjectID int
 	Total    uint32
 	Offset   uint32
-	Outcome  FileTxOutcome
+	Outcome  MPOutcome
 }
 
 func (NotificationMP) isNotification() {}
+
+// NotificationPDID is the payload of a NotificationTypePDID notification: the CP
+// collected a PD's identity during the INIT handshake and it differs from the
+// last identity seen for that PD (first contact, or the device at an address
+// changed). ID mirrors what GetPDID would return.
+type NotificationPDID struct {
+	ID PdId
+}
+
+func (NotificationPDID) isNotification() {}
 
 // EventMfgReply represents manufacturer reply event
 type EventMfgReply struct {
@@ -395,7 +405,20 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			var mpType, objectID, outcome C.int
 			var total, offset C.uint32_t
 			C.get_notification_mp(cEvent, &mpType, &objectID, &total, &offset, &outcome)
-			payload = NotificationMP{MPType: MPMsgType(mpType), ObjectID: int(objectID), Total: uint32(total), Offset: uint32(offset), Outcome: FileTxOutcome(outcome)}
+			payload = NotificationMP{MPType: MPMsgType(mpType), ObjectID: int(objectID), Total: uint32(total), Offset: uint32(offset), Outcome: MPOutcome(outcome)}
+		case NotificationTypePDID:
+			var version, model C.int
+			var vendorCode, serialNumber, firmwareVersion C.uint
+			C.get_notification_pd_id(cEvent, &version, &model, &vendorCode, &serialNumber, &firmwareVersion)
+			payload = NotificationPDID{ID: PdId{
+				Version:       int(version),
+				Model:         int(model),
+				VendorCode:    int(vendorCode),
+				SerialNumber:  int(serialNumber),
+				FirmwareMajor: int((firmwareVersion >> 16) & 0xFF),
+				FirmwareMinor: int((firmwareVersion >> 8) & 0xFF),
+				FirmwareBuild: int(firmwareVersion & 0xFF),
+			}}
 		}
 		eventData = EventNotification{Type: nt, Payload: payload}
 	default:

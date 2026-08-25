@@ -167,6 +167,7 @@ const (
 	NotificationTypeMPStart    NotificationType = C.OSDP_NOTIFICATION_MP_START
 	NotificationTypeMPProgress NotificationType = C.OSDP_NOTIFICATION_MP_PROGRESS
 	NotificationTypeMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
+	NotificationTypePDID       NotificationType = C.OSDP_NOTIFICATION_PD_ID
 )
 
 // MPMsgType identifies the multipart message family carried by an MP_*
@@ -181,17 +182,18 @@ const (
 	MPMsgBioRead      MPMsgType = C.OSDP_MP_MSG_BIOREAD
 )
 
-// FileTxOutcome enumerates the possible outcomes of a multipart file transfer.
-// It is surfaced as NotificationMP.Outcome on a NotificationTypeMPDone
-// notification (meaningful only for that type).
-type FileTxOutcome int
+// MPOutcome enumerates the possible outcomes of a multipart transfer. It is
+// surfaced as NotificationMP.Outcome on a NotificationTypeMPDone notification
+// (meaningful only for that type). OK and Aborted apply to any multipart
+// transfer; OKRebooting, Unrecognized, and Invalid are file-transfer specific.
+type MPOutcome int
 
 const (
-	FileTxOutcomeOK           FileTxOutcome = C.OSDP_FILE_TX_OUTCOME_OK
-	FileTxOutcomeOKRebooting  FileTxOutcome = C.OSDP_FILE_TX_OUTCOME_OK_REBOOTING
-	FileTxOutcomeAborted      FileTxOutcome = C.OSDP_FILE_TX_OUTCOME_ABORTED
-	FileTxOutcomeUnrecognized FileTxOutcome = C.OSDP_FILE_TX_OUTCOME_UNRECOGNIZED
-	FileTxOutcomeInvalid      FileTxOutcome = C.OSDP_FILE_TX_OUTCOME_INVALID
+	MPOutcomeOK           MPOutcome = C.OSDP_MP_OUTCOME_OK
+	MPOutcomeOKRebooting  MPOutcome = C.OSDP_MP_OUTCOME_OK_REBOOTING
+	MPOutcomeAborted      MPOutcome = C.OSDP_MP_OUTCOME_ABORTED
+	MPOutcomeUnrecognized MPOutcome = C.OSDP_MP_OUTCOME_UNRECOGNIZED
+	MPOutcomeInvalid      MPOutcome = C.OSDP_MP_OUTCOME_INVALID
 )
 
 // NakCode is the reason a PD rejected a command.

@@ -45,7 +45,7 @@ func TestNotificationPDStatusDecode(t *testing.T) {
 }
 
 func TestNotificationMPDecode(t *testing.T) {
-	e := buildNotificationMP(NotificationTypeMPDone, MPMsgBioRead, 7, 256, 128, FileTxOutcomeOK)
+	e := buildNotificationMP(NotificationTypeMPDone, MPMsgBioRead, 7, 256, 128, MPOutcomeOK)
 	defer freeEvent(e)
 	n := decodeEvent(e).Event.(EventNotification)
 	if n.Type != NotificationTypeMPDone {
@@ -55,7 +55,24 @@ func TestNotificationMPDecode(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload = %T, want NotificationMP", n.Payload)
 	}
-	if mp.MPType != MPMsgBioRead || mp.Total != 256 || mp.Offset != 128 || mp.ObjectID != 7 || mp.Outcome != FileTxOutcomeOK {
+	if mp.MPType != MPMsgBioRead || mp.Total != 256 || mp.Offset != 128 || mp.ObjectID != 7 || mp.Outcome != MPOutcomeOK {
 		t.Errorf("mp = %+v", mp)
+	}
+}
+
+func TestNotificationPDIDDecode(t *testing.T) {
+	id := PdId{Version: 2, Model: 3, VendorCode: 0x153, SerialNumber: 0x12345, FirmwareMajor: 1, FirmwareMinor: 2, FirmwareBuild: 3}
+	e := buildNotificationPDID(id)
+	defer freeEvent(e)
+	n := decodeEvent(e).Event.(EventNotification)
+	if n.Type != NotificationTypePDID {
+		t.Fatalf("Type = %v, want NotificationTypePDID", n.Type)
+	}
+	p, ok := n.Payload.(NotificationPDID)
+	if !ok {
+		t.Fatalf("payload = %T, want NotificationPDID", n.Payload)
+	}
+	if p.ID != id {
+		t.Errorf("pd_id = %+v, want %+v", p.ID, id)
 	}
 }

@@ -14,7 +14,7 @@
 #define PROJECT_VERSION                "3.2.0"
 #define PROJECT_NAME                   "libosdp"
 #define GIT_BRANCH                     "HEAD"
-#define GIT_REV                        "v3.2.0-241-g7d10f58"
+#define GIT_REV                        "v3.2.0-250-g27e7b61"
 #define GIT_TAG                        "v3.2.0"
 #define GIT_DIFF                       ""
 #define REPO_ROOT                      "/home/sidcha/work/osdp/libosdp-go/libosdp"

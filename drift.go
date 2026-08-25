@@ -20,7 +20,7 @@ const (
 	driftEventSentinel    = int(C.OSDP_EVENT_SENTINEL)
 	driftPdCapSentinel    = int(C.OSDP_PD_CAP_SENTINEL)
 	driftCardFmtSentinel  = int(C.OSDP_CARD_FMT_SENTINEL)
-	driftNotificationLast = int(C.OSDP_NOTIFICATION_MP_DONE)
+	driftNotificationLast = int(C.OSDP_NOTIFICATION_PD_ID)
 	driftStatusReportLast = int(C.OSDP_STATUS_REPORT_READER)
 	driftBioTypeSentinel  = int(C.OSDP_BIO_TYPE_SENTINEL)
 	driftBioFmtSentinel   = int(C.OSDP_BIO_FMT_SENTINEL)

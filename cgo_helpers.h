@@ -177,6 +177,13 @@ static inline void get_notification_mp(struct osdp_event *ev, int *mp_type, int 
     *offset = ev->notif.mp.offset;
     *outcome = ev->notif.mp.outcome;
 }
+static inline void get_notification_pd_id(struct osdp_event *ev, int *version, int *model, unsigned int *vendor_code, unsigned int *serial_number, unsigned int *firmware_version) {
+    *version = ev->notif.pd_id.version;
+    *model = ev->notif.pd_id.model;
+    *vendor_code = ev->notif.pd_id.vendor_code;
+    *serial_number = ev->notif.pd_id.serial_number;
+    *firmware_version = ev->notif.pd_id.firmware_version;
+}
 
 // Notification setters: notifications are decode-only in production (libosdp
 // synthesizes them), so these exist to construct osdp_event fixtures in tests.
@@ -201,6 +208,14 @@ static inline void set_notification_mp(struct osdp_event *ev, int type, enum osd
     ev->notif.mp.total = total;
     ev->notif.mp.offset = offset;
     ev->notif.mp.outcome = outcome;
+}
+static inline void set_notification_pd_id(struct osdp_event *ev, int version, int model, unsigned int vendor_code, unsigned int serial_number, unsigned int firmware_version) {
+    ev->notif.type = OSDP_NOTIFICATION_PD_ID;
+    ev->notif.pd_id.version = version;
+    ev->notif.pd_id.model = model;
+    ev->notif.pd_id.vendor_code = vendor_code;
+    ev->notif.pd_id.serial_number = serial_number;
+    ev->notif.pd_id.firmware_version = firmware_version;
 }
 
 static inline void set_event_cardread(struct osdp_event *ev, uint8_t reader_no, uint8_t format, uint8_t direction, int length_bits, uint8_t *data, int data_len) {

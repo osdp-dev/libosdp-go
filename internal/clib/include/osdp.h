@@ -1110,17 +1110,30 @@ enum osdp_notification_type {
 	 * Multipart transfer terminated. `mp.outcome` is set.
 	 */
 	OSDP_NOTIFICATION_MP_DONE,
+	/**
+	 * PD ID collected (CP mode). Payload: `pd_id` (@ref osdp_pd_id).
+	 *
+	 * Fires when the CP reads a PD's identity (osdp_PDID) during the INIT
+	 * handshake and it differs from the last one seen for that PD: on
+	 * first contact, or if the device answering an address changed. A
+	 * reconnect that reports the same identity is silent.
+	 */
+	OSDP_NOTIFICATION_PD_ID,
 };
 
 /**
- * @brief Outcome reported by OSDP_NOTIFICATION_MP_DONE
+ * @brief Outcome reported by OSDP_NOTIFICATION_MP_DONE.
+ *
+ * OSDP_MP_OUTCOME_OK and OSDP_MP_OUTCOME_ABORTED apply to any multipart
+ * transfer. The remaining values are file-transfer specific: only a transfer
+ * of @ref OSDP_MP_MSG_FILE_TRANSFER ever reports them.
  */
-enum osdp_file_tx_outcome {
-	OSDP_FILE_TX_OUTCOME_OK = 0,           /**< Contents processed by PD */
-	OSDP_FILE_TX_OUTCOME_OK_REBOOTING = 1, /**< OK; PD will now reset */
-	OSDP_FILE_TX_OUTCOME_ABORTED = 2,      /**< Transfer aborted (local or remote) */
-	OSDP_FILE_TX_OUTCOME_UNRECOGNIZED = 3, /**< PD did not recognize file contents */
-	OSDP_FILE_TX_OUTCOME_INVALID = 4,      /**< PD rejected file data as malformed */
+enum osdp_mp_outcome {
+	OSDP_MP_OUTCOME_OK = 0,           /**< Transfer completed successfully */
+	OSDP_MP_OUTCOME_OK_REBOOTING = 1, /**< File transfer: OK; PD will now reset */
+	OSDP_MP_OUTCOME_ABORTED = 2,      /**< Transfer aborted (local or remote) */
+	OSDP_MP_OUTCOME_UNRECOGNIZED = 3, /**< File transfer: PD did not recognize contents */
+	OSDP_MP_OUTCOME_INVALID = 4,      /**< File transfer: PD rejected data as malformed */
 };
 
 /**
@@ -1142,7 +1155,7 @@ struct osdp_mp_notification {
 	int object_id;                 /**< File id for file transfer; 0 reserved */
 	uint32_t total;                /**< Full payload length */
 	uint32_t offset;                /**< Bytes transferred so far */
-	int outcome;                   /**< Meaningful at MP_DONE */
+	enum osdp_mp_outcome outcome;  /**< Meaningful at MP_DONE */
 };
 
 /**
@@ -1207,6 +1220,7 @@ struct osdp_notification {
 		struct osdp_notification_sc_status sc_status; /**< SC_STATUS */
 		struct osdp_notification_pd_status pd_status; /**< PD_STATUS */
 		struct osdp_mp_notification mp;               /**< MP_* */
+		struct osdp_pd_id pd_id;                      /**< PD_ID */
 	};
 };
 

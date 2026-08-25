@@ -25,6 +25,8 @@ enum osdp_cp_error_e {
 	OSDP_CP_ERR_APP = -8, /* Application layer error */
 };
 
+static void notify_pd_id(struct osdp_pd *pd);
+
 static void cp_dispatch_event(struct osdp_pd *pd,
 			      const struct osdp_event *event)
 {
@@ -410,6 +412,22 @@ static bool cp_pd_declared_crc(struct osdp_pd *pd)
 	       (cap->compliance_level & 0x01);
 }
 
+static bool pd_id_changed(const struct osdp_pd_id *a,
+			  const struct osdp_pd_id *b)
+{
+	return a->version != b->version || a->model != b->model ||
+	       a->vendor_code != b->vendor_code ||
+	       a->serial_number != b->serial_number ||
+	       a->firmware_version != b->firmware_version;
+}
+
+/* An identity is "known" once collected; a fresh PD context is all-zero. */
+static bool pd_id_known(const struct osdp_pd_id *id)
+{
+	return id->version || id->model || id->vendor_code ||
+	       id->serial_number || id->firmware_version;
+}
+
 static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 {
 	int t, ret = OSDP_CP_ERR_GENERIC, pos = 0;
@@ -464,17 +482,32 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			pd->nak_code, osdp_cmd_name(pd->cmd_id), pd->cmd_id);
 		ret = OSDP_CP_ERR_NONE;
 		break;
-	case REPLY_PDID:
+	case REPLY_PDID: {
+		struct osdp_pd_id prev;
+
 		if (len != REPLY_PDID_DATA_LEN) {
 			break;
 		}
+		prev = pd->id;
 		pd->id.vendor_code  = bread_u24_le(buf, &pos);
 		pd->id.model = buf[pos++];
 		pd->id.version = buf[pos++];
 		pd->id.serial_number = bread_u32_le(buf, &pos);
 		pd->id.firmware_version = bread_u24_be(buf, &pos);
+		/* Report the identity only when it is new or has changed since
+		 * last collected; pd->id persists across reconnects and starts
+		 * zeroed, so a same-id reconnect stays silent. A change away
+		 * from an already-known identity means a different device is
+		 * answering this address -- worth a warning. */
+		if (pd_id_changed(&prev, &pd->id)) {
+			if (pd_id_known(&prev)) {
+				LOG_WRN("PD ID changed since last contact");
+			}
+			notify_pd_id(pd);
+		}
 		ret = OSDP_CP_ERR_NONE;
 		break;
+	}
 	case REPLY_PDCAP:
 		if ((len % REPLY_PDCAP_ENTITY_LEN) != 0) {
 			LOG_ERR("PDCAP response length is not a multiple of 3");
@@ -843,10 +876,9 @@ static int cp_process_reply(struct osdp_pd *pd)
 		return OSDP_CP_ERR_RETRY_CMD;
 	case OSDP_ERR_PKT_NACK:
 		if (pd->nak_code == OSDP_PD_NAK_SEQ_NUM) {
-			LOG_WRN("NAK(SEQ_NUM); restarting communication");
-			osdp_phy_state_reset(pd, true);
-			sc_deactivate(pd);
-			pd->state = OSDP_CP_STATE_INIT;
+			LOG_WRN("NAK(SEQ_NUM); link out of sync; "
+				"resetting connection");
+			make_request(pd, CP_REQ_LINK_RESET);
 			return OSDP_CP_ERR_SEQ_NUM;
 		}
 		/* Other NACKs: CP cannot do anything about an invalid reply from a PD.
@@ -1099,24 +1131,61 @@ static const char *state_get_name(enum osdp_cp_state_e state)
 	}
 }
 
+/*
+ * Set a dequeued command up as the active command and return the wire cmd_id to
+ * send for it, or -1 if it could not be translated (then it is completed FAILED).
+ */
+static int cp_setup_active_cmd(struct osdp_pd *pd, const struct osdp_cmd *cmd)
+{
+	int ret;
+
+	ret = cp_translate_cmd(pd, cmd);
+	if (cmd->flags & OSDP_CMD_FLAG_BROADCAST) {
+		SET_FLAG(pd, PD_FLAG_PKT_BROADCAST);
+	}
+	if (ret < 0) {
+		cp_complete_cmd(pd, cmd, OSDP_COMPLETION_FAILED);
+		pd->active_cmd = NULL;
+	} else {
+		pd->active_cmd = cmd;
+	}
+	cp_cmd_free(pd, cmd);
+	return ret;
+}
+
+/* Poll only as often as OSDP_PD_POLL_TIMEOUT_MS allows; -1 means "not yet" */
+static int cp_get_poll_command(struct osdp_pd *pd)
+{
+	if (osdp_millis_since(pd->tstamp) > OSDP_PD_POLL_TIMEOUT_MS) {
+		pd->tstamp = osdp_millis_now();
+		return CMD_POLL;
+	}
+
+	return -1;
+}
+
+/*
+ * Feature-engine contract: each engine below (file/piv/bio) is a polled
+ * command source with private state. To participate here an engine exports:
+ *
+ *   *_is_active(pd)      cheap liveness predicate; false when idle
+ *   *_abort(pd)          idempotent teardown; fires MP START-before-DONE;
+ *                        must be wired into osdp_engines_abort()
+ *   *_cp_get_command(pd) >0 wire cmd to send now, 0 not mine (ask next),
+ *                        -1 mine but hold the bus this tick
+ *   *_pd_reply_pending(pd)  (optional, PD role) continuation to drain on POLL
+ *
+ * Priority is positional: app queue first, then engines in order, then the
+ * paced keep-alive POLL. Engines are consulted *before* the POLL timer so an
+ * active transfer streams at full refresh rate.
+ */
 static int cp_get_online_command(struct osdp_pd *pd)
 {
 	const struct osdp_cmd *cmd;
 	int ret;
 
 	if (cp_cmd_dequeue(pd, &cmd) == 0) {
-		ret = cp_translate_cmd(pd, cmd);
-		if (cmd->flags & OSDP_CMD_FLAG_BROADCAST) {
-			SET_FLAG(pd, PD_FLAG_PKT_BROADCAST);
-		}
-		if (ret < 0) {
-			cp_complete_cmd(pd, cmd, OSDP_COMPLETION_FAILED);
-			pd->active_cmd = NULL;
-		} else {
-			pd->active_cmd = cmd;
-		}
-		cp_cmd_free(pd, cmd);
-		return ret;
+		return cp_setup_active_cmd(pd, cmd);
 	}
 
 	ret = osdp_file_tx_get_command(pd);
@@ -1134,12 +1203,7 @@ static int cp_get_online_command(struct osdp_pd *pd)
 		return ret;
 	}
 
-	if (osdp_millis_since(pd->tstamp) > OSDP_PD_POLL_TIMEOUT_MS) {
-		pd->tstamp = osdp_millis_now();
-		return CMD_POLL;
-	}
-
-	return -1;
+	return cp_get_poll_command(pd);
 }
 
 static void notify_pd_status(struct osdp_pd *pd, bool is_online)
@@ -1154,6 +1218,22 @@ static void notify_pd_status(struct osdp_pd *pd, bool is_online)
 	evt.type = OSDP_EVENT_NOTIFICATION;
 	evt.notif.type = OSDP_NOTIFICATION_PD_STATUS;
 	evt.notif.pd_status.online = is_online;
+	ctx->event_callback(ctx->event_callback_arg, pd->idx, &evt);
+	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
+}
+
+static void notify_pd_id(struct osdp_pd *pd)
+{
+	struct osdp *ctx = pd_to_osdp(pd);
+	struct osdp_event evt;
+
+	if (!ctx->event_callback || !is_notifications_enabled(pd)) {
+		return;
+	}
+
+	evt.type = OSDP_EVENT_NOTIFICATION;
+	evt.notif.type = OSDP_NOTIFICATION_PD_ID;
+	evt.notif.pd_id = pd->id;
 	ctx->event_callback(ctx->event_callback_arg, pd->idx, &evt);
 	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
 }
@@ -1190,7 +1270,7 @@ static void cp_keyset_complete(struct osdp_pd *pd)
 	}
 	sc_deactivate(pd);
 	notify_sc_status(pd);
-	if (pd->state == OSDP_CP_STATE_ONLINE) {
+	if (cp_is_online(pd)) {
 		make_request(pd, CP_REQ_RESTART_SC);
 		LOG_INF("SCBK set; restarting SC to verify new SCBK");
 	}
@@ -1313,42 +1393,37 @@ static inline bool state_check_reply(struct osdp_pd *pd)
 	}
 }
 
+/*
+ * The two transition tables below are pure functions of `pd`: guards and
+ * next-state selection only, no writes, no logging. They may be evaluated
+ * any number of times. Everything that must happen exactly once when a
+ * transition is taken lives in cp_transition_effects(); state *entry*
+ * actions live in cp_state_change().
+ */
 static enum osdp_cp_state_e get_next_ok_state(struct osdp_pd *pd)
 {
-	enum osdp_cp_state_e state = pd->state;
-
-	switch (state) {
+	switch (pd->state) {
 	case OSDP_CP_STATE_INIT:
 		return OSDP_CP_STATE_CAPDET;
 	case OSDP_CP_STATE_CAPDET:
 		if (sc_is_capable(pd)) {
-			CLEAR_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
 			return OSDP_CP_STATE_SC_CHLNG;
 		}
 		if (is_enforce_secure(pd)) {
-			LOG_INF("SC disabled/incapable; Set PD offline "
-				"due to ENFORCE_SECURE");
 			return OSDP_CP_STATE_OFFLINE;
 		}
 		return OSDP_CP_STATE_ONLINE;
 	case OSDP_CP_STATE_SC_CHLNG:
-		osdp_metrics_report(pd, OSDP_METRIC_SC_HANDSHAKE);
 		return OSDP_CP_STATE_SC_SCRYPT;
 	case OSDP_CP_STATE_SC_SCRYPT:
-		sc_activate(pd);
-		notify_sc_status(pd);
 		if (sc_use_scbkd(pd)) {
-			LOG_WRN("SC active with SCBK-D. Set SCBK");
 			return OSDP_CP_STATE_SET_SCBK;
 		}
 		return OSDP_CP_STATE_ONLINE;
 	case OSDP_CP_STATE_SET_SCBK:
-		cp_keyset_complete(pd);
 		return OSDP_CP_STATE_SC_CHLNG;
 	case OSDP_CP_STATE_ONLINE:
 		if (cp_sc_should_retry(pd)) {
-			LOG_INF("Attempting to restart SC after %d seconds",
-				OSDP_PD_SC_RETRY_MS/1000);
 			return OSDP_CP_STATE_SC_CHLNG;
 		}
 		return OSDP_CP_STATE_ONLINE;
@@ -1365,44 +1440,27 @@ static enum osdp_cp_state_e get_next_ok_state(struct osdp_pd *pd)
 
 static enum osdp_cp_state_e get_next_err_state(struct osdp_pd *pd)
 {
-	enum osdp_cp_state_e state = pd->state;
-
-	switch (state) {
+	switch (pd->state) {
 	case OSDP_CP_STATE_INIT:
 		return OSDP_CP_STATE_OFFLINE;
 	case OSDP_CP_STATE_CAPDET:
 		return OSDP_CP_STATE_OFFLINE;
 	case OSDP_CP_STATE_SC_CHLNG:
 		if (is_enforce_secure(pd)) {
-			LOG_ERR("CHLNG failed. Set PD offline due to "
-				"ENFORCE_SECURE");
 			return OSDP_CP_STATE_OFFLINE;
 		}
 		if (!sc_use_scbkd(pd)) {
-			SET_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
-			LOG_WRN("SC Failed. Retry with SCBK-D");
+			/* Self-transition: retry the handshake with SCBK-D */
 			return OSDP_CP_STATE_SC_CHLNG;
 		}
-		CLEAR_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
-		/**
-		 * SC setup failed; Update sc_tstamp so the next retry happens
-		 * after OSDP_PD_SC_RETRY_MS.
-		 */
-		pd->sc_tstamp = osdp_millis_now();
 		return OSDP_CP_STATE_ONLINE;
 	case OSDP_CP_STATE_SC_SCRYPT:
 		if (is_enforce_secure(pd)) {
-			LOG_ERR("SCRYPT failed. Set PD offline due to "
-				"ENFORCE_SECURE");
 			return OSDP_CP_STATE_OFFLINE;
 		}
 		return OSDP_CP_STATE_ONLINE;
 	case OSDP_CP_STATE_SET_SCBK:
-		sc_deactivate(pd);
-		notify_sc_status(pd);
 		if (is_enforce_secure(pd) || sc_use_scbkd(pd)) {
-			LOG_ERR("Failed to set SCBK; "
-				"Set PD offline due to ENFORCE_SECURE");
 			return OSDP_CP_STATE_OFFLINE;
 		}
 		return OSDP_CP_STATE_ONLINE;
@@ -1421,6 +1479,93 @@ static inline enum osdp_cp_state_e get_next_state(struct osdp_pd *pd, int err)
 	return (err == 0) ? get_next_ok_state(pd) : get_next_err_state(pd);
 }
 
+/*
+ * Transition effects: run exactly once per state_update() pass, after the
+ * (pure) tables picked `next` and before cp_state_change() applies it. Keyed
+ * on (cur, err, next) because several effects are transition-specific rather
+ * than state-specific, and some ride self-transitions that never reach
+ * cp_state_change() (the SC_CHLNG -> SC_CHLNG SCBK-D retry must NOT re-run
+ * osdp_sc_setup(), so it must not be an entry action).
+ *
+ * PD_FLAG_SC_USE_SCBKD is a shadow sub-state of SC_CHLNG (which key the
+ * next handshake attempt uses). Promoting it to explicit states is possible
+ * but not worth the churn; this function is the only writer.
+ */
+static void cp_transition_effects(struct osdp_pd *pd,
+				  enum osdp_cp_state_e cur,
+				  enum osdp_cp_state_e next, int err)
+{
+	if (err == 0) {
+		switch (cur) {
+		case OSDP_CP_STATE_CAPDET:
+			if (next == OSDP_CP_STATE_SC_CHLNG) {
+				CLEAR_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
+			} else if (next == OSDP_CP_STATE_OFFLINE) {
+				LOG_INF("SC disabled/incapable; Set PD offline "
+					"due to ENFORCE_SECURE");
+			}
+			break;
+		case OSDP_CP_STATE_SC_CHLNG:
+			osdp_metrics_report(pd, OSDP_METRIC_SC_HANDSHAKE);
+			break;
+		case OSDP_CP_STATE_SC_SCRYPT:
+			sc_activate(pd);
+			notify_sc_status(pd);
+			if (next == OSDP_CP_STATE_SET_SCBK) {
+				LOG_WRN("SC active with SCBK-D. Set SCBK");
+			}
+			break;
+		case OSDP_CP_STATE_SET_SCBK:
+			cp_keyset_complete(pd);
+			break;
+		case OSDP_CP_STATE_ONLINE:
+			if (next == OSDP_CP_STATE_SC_CHLNG) {
+				LOG_INF("Attempting to restart SC after %d "
+					"seconds", OSDP_PD_SC_RETRY_MS/1000);
+			}
+			break;
+		default:
+			break;
+		}
+		return;
+	}
+
+	switch (cur) {
+	case OSDP_CP_STATE_SC_CHLNG:
+		if (next == OSDP_CP_STATE_OFFLINE) {
+			LOG_ERR("CHLNG failed. Set PD offline due to "
+				"ENFORCE_SECURE");
+		} else if (next == OSDP_CP_STATE_SC_CHLNG) {
+			SET_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
+			LOG_WRN("SC Failed. Retry with SCBK-D");
+		} else {
+			CLEAR_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
+			/**
+			 * SC setup failed; Update sc_tstamp so the next retry
+			 * happens after OSDP_PD_SC_RETRY_MS.
+			 */
+			pd->sc_tstamp = osdp_millis_now();
+		}
+		break;
+	case OSDP_CP_STATE_SC_SCRYPT:
+		if (next == OSDP_CP_STATE_OFFLINE) {
+			LOG_ERR("SCRYPT failed. Set PD offline due to "
+				"ENFORCE_SECURE");
+		}
+		break;
+	case OSDP_CP_STATE_SET_SCBK:
+		sc_deactivate(pd);
+		notify_sc_status(pd);
+		if (next == OSDP_CP_STATE_OFFLINE) {
+			LOG_ERR("Failed to set SCBK; "
+				"Set PD offline due to ENFORCE_SECURE");
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 {
 	enum osdp_cp_state_e cur = pd->state;
@@ -1436,14 +1581,16 @@ static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 	case OSDP_CP_STATE_OFFLINE:
 		pd->tstamp = osdp_millis_now();
 		pd->wait_ms = OSDP_ONLINE_RETRY_WAIT_MAX_MS;
+		/* Session-scoped requests refer to a session that no longer
+		 * exists; a stale one must not fire on the next ONLINE visit.
+		 * Lifecycle bits (DISABLE/ENABLE) survive. */
+		pd->request &= ~(CP_REQ_RESTART_SC | CP_REQ_OFFLINE);
 		sc_deactivate(pd);
 		notify_sc_status(pd);
 		LOG_ERR("Going offline for %" PRIu32
 			" seconds; Was in '%s' state",
 			pd->wait_ms / 1000, state_get_name(cur));
-		osdp_file_tx_abort(pd);
-		osdp_piv_abort(pd);
-		osdp_bio_abort(pd);
+		osdp_engines_abort(pd);
 		notify_pd_status(pd, false);
 		break;
 	case OSDP_CP_STATE_SC_CHLNG:
@@ -1451,11 +1598,10 @@ static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 		osdp_sc_setup(pd);
 		break;
 	case OSDP_CP_STATE_DISABLED:
+		pd->request &= ~(CP_REQ_RESTART_SC | CP_REQ_OFFLINE);
 		sc_deactivate(pd);
 		notify_sc_status(pd);
-		osdp_file_tx_abort(pd);
-		osdp_piv_abort(pd);
-		osdp_bio_abort(pd);
+		osdp_engines_abort(pd);
 		notify_pd_status(pd, false);
 		osdp_phy_state_reset(pd, true);
 		LOG_INF("PD disabled; going offline until re-enabled");
@@ -1473,9 +1619,9 @@ static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 	pd->state = next;
 }
 
-static bool cp_cmd_is_app_owned(int cmd_id)
+static bool cp_cmd_is_app_owned(struct osdp_pd *pd)
 {
-	switch (cmd_id) {
+	switch (pd->cmd_id) {
 	case CMD_OUT:
 	case CMD_LED:
 	case CMD_BUZ:
@@ -1529,9 +1675,9 @@ static bool cp_nak_code_is_app_level(uint8_t nak_code)
  */
 static bool cp_cmd_failure_is_soft(struct osdp_pd *pd)
 {
-	if (pd->state != OSDP_CP_STATE_ONLINE ||
+	if (!cp_is_online(pd) ||
 	    pd->phy_state != OSDP_CP_PHY_STATE_DONE ||
-	    !cp_cmd_is_app_owned(pd->cmd_id)) {
+	    !cp_cmd_is_app_owned(pd)) {
 		return false;
 	}
 
@@ -1613,7 +1759,7 @@ static void notify_command_status(struct osdp_pd *pd, int status)
 	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
 }
 
-static int state_update(struct osdp_pd *pd)
+static void state_update(struct osdp_pd *pd)
 {
 	int err;
 	bool status;
@@ -1622,7 +1768,7 @@ static int state_update(struct osdp_pd *pd)
 	if (cp_phy_running(pd)) {
 		err = cp_phy_state_update(pd);
 		if (err == OSDP_CP_ERR_INPROG || err == OSDP_CP_ERR_DEFER) {
-			return err;
+			return;
 		}
 	}
 
@@ -1631,7 +1777,7 @@ static int state_update(struct osdp_pd *pd)
 	case OSDP_CP_PHY_STATE_IDLE:
 		pd->cmd_id = state_get_cmd(pd);
 		if (pd->cmd_id > 0 && cp_phy_kick(pd)) {
-			return OSDP_CP_ERR_DEFER;
+			return;
 		}
 		break;
 	case OSDP_CP_PHY_STATE_ERR:
@@ -1651,8 +1797,8 @@ static int state_update(struct osdp_pd *pd)
 				/* Going offline used to do this for us. */
 				osdp_file_tx_abort(pd);
 			}
-			if (err == OSDP_CP_ERR_NONE && osdp_piv_is_active(pd) &&
-			    pd->cmd_id == TO_PIV(pd)->wire_cmd) {
+			if (err == OSDP_CP_ERR_NONE &&
+			    osdp_piv_owns_cmd(pd, pd->cmd_id)) {
 				/* PD refused the smartcard command (NAK). */
 				osdp_piv_abort(pd);
 			}
@@ -1663,19 +1809,34 @@ static int state_update(struct osdp_pd *pd)
 		BUG();
 	}
 
-	next = get_next_state(pd, err);
+	if (check_request(pd, CP_REQ_LINK_RESET)) {
+		/* Link integrity trumps whatever the transition tables would
+		 * pick (and any pending session-scoped request): reconnect
+		 * from scratch via the OFFLINE dwell. */
+		next = OSDP_CP_STATE_OFFLINE;
+	} else {
+		next = get_next_state(pd, err);
+		cp_transition_effects(pd, cur, next, err);
 
-	if (pd->state == OSDP_CP_STATE_ONLINE || next == OSDP_CP_STATE_ONLINE) {
-		if (check_request(pd, CP_REQ_RESTART_SC)) {
-			osdp_phy_state_reset(pd, true);
-			next = OSDP_CP_STATE_SC_CHLNG;
-		}
-		if (check_request(pd, CP_REQ_OFFLINE)) {
-			LOG_INF("Going offline due to request");
-			next = OSDP_CP_STATE_OFFLINE;
+		if (pd->state == OSDP_CP_STATE_ONLINE ||
+		    next == OSDP_CP_STATE_ONLINE) {
+			if (check_request(pd, CP_REQ_RESTART_SC)) {
+				osdp_phy_state_reset(pd, true);
+				next = OSDP_CP_STATE_SC_CHLNG;
+			}
+			if (check_request(pd, CP_REQ_OFFLINE)) {
+				LOG_INF("Going offline due to request");
+				next = OSDP_CP_STATE_OFFLINE;
+			}
 		}
 	}
 
+	/* DISABLE/ENABLE are checked last, unconditionally: the app's
+	 * lifecycle verdict overrides any protocol-derived transition.
+	 * The two bits cannot be pending together -- osdp_cp_enable_pd()
+	 * refuses unless already DISABLED and disable refuses while a
+	 * disable is pending -- so their textual order here never has to
+	 * arbitrate a race. */
 	if (check_request(pd, CP_REQ_DISABLE)) {
 		next = OSDP_CP_STATE_DISABLED;
 	}
@@ -1687,7 +1848,6 @@ static int state_update(struct osdp_pd *pd)
 	if (cur != next) {
 		cp_state_change(pd, next);
 	}
-	return OSDP_CP_ERR_DEFER;
 }
 
 static int cp_submit_command(struct osdp_pd *pd, const struct osdp_cmd *cmd)
@@ -1701,7 +1861,7 @@ static int cp_submit_command(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 		return -1;
 	}
 
-	if (pd->state != OSDP_CP_STATE_ONLINE) {
+	if (!cp_is_online(pd)) {
 		LOG_ERR("PD is not online");
 		return -1;
 	}
@@ -2192,6 +2352,8 @@ bool osdp_cp_is_pd_enabled(const osdp_t *ctx, int pd_idx)
 OSDP_TEST_ALIAS(cp_cmd_enqueue);
 OSDP_TEST_ALIAS(cp_phy_state_update);
 OSDP_TEST_ALIAS(state_update);
+OSDP_TEST_ALIAS(get_next_ok_state);
+OSDP_TEST_ALIAS(get_next_err_state);
 OSDP_TEST_ALIAS(cp_cmd_failure_is_soft);
 
 /* Export the CP frame codecs to out-of-module drivers (tests, embedders). */
