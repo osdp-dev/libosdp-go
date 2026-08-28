@@ -157,32 +157,37 @@ static inline void get_event_status(struct osdp_event *ev, uint8_t *type, uint8_
     memcpy(report, ev->status.report, ev->status.nr_entries);
 }
 
-static inline int get_notification_type(struct osdp_event *ev) { return ev->notif.type; }
+// Notifications reach a CP as an osdp_event and a PD as an osdp_cmd; both carry
+// the same struct osdp_notification, so the getters take it directly.
+static inline struct osdp_notification *event_notif(struct osdp_event *ev) { return &ev->notif; }
+static inline struct osdp_notification *cmd_notif(struct osdp_cmd *cmd) { return &cmd->notif; }
 
-static inline void get_notification_command(struct osdp_event *ev, int *command, int *success) {
-    *command = ev->notif.command.command;
-    *success = ev->notif.command.success ? 1 : 0;
+static inline int get_notification_type(struct osdp_notification *n) { return n->type; }
+
+static inline void get_notification_command(struct osdp_notification *n, int *command, int *success) {
+    *command = n->command.command;
+    *success = n->command.success ? 1 : 0;
 }
-static inline void get_notification_sc_status(struct osdp_event *ev, int *active, int *scbk_d) {
-    *active = ev->notif.sc_status.active ? 1 : 0;
-    *scbk_d = ev->notif.sc_status.scbk_d ? 1 : 0;
+static inline void get_notification_sc_status(struct osdp_notification *n, int *active, int *scbk_d) {
+    *active = n->sc_status.active ? 1 : 0;
+    *scbk_d = n->sc_status.scbk_d ? 1 : 0;
 }
-static inline void get_notification_pd_status(struct osdp_event *ev, int *online) {
-    *online = ev->notif.pd_status.online ? 1 : 0;
+static inline void get_notification_pd_status(struct osdp_notification *n, int *online) {
+    *online = n->pd_status.online ? 1 : 0;
 }
-static inline void get_notification_mp(struct osdp_event *ev, int *mp_type, int *object_id, uint32_t *total, uint32_t *offset, int *outcome) {
-    *mp_type = ev->notif.mp.mp_type;
-    *object_id = ev->notif.mp.object_id;
-    *total = ev->notif.mp.total;
-    *offset = ev->notif.mp.offset;
-    *outcome = ev->notif.mp.outcome;
+static inline void get_notification_mp(struct osdp_notification *n, int *mp_type, int *object_id, uint32_t *total, uint32_t *offset, int *outcome) {
+    *mp_type = n->mp.mp_type;
+    *object_id = n->mp.object_id;
+    *total = n->mp.total;
+    *offset = n->mp.offset;
+    *outcome = n->mp.outcome;
 }
-static inline void get_notification_pd_id(struct osdp_event *ev, int *version, int *model, unsigned int *vendor_code, unsigned int *serial_number, unsigned int *firmware_version) {
-    *version = ev->notif.pd_id.version;
-    *model = ev->notif.pd_id.model;
-    *vendor_code = ev->notif.pd_id.vendor_code;
-    *serial_number = ev->notif.pd_id.serial_number;
-    *firmware_version = ev->notif.pd_id.firmware_version;
+static inline void get_notification_pd_id(struct osdp_notification *n, int *version, int *model, unsigned int *vendor_code, unsigned int *serial_number, unsigned int *firmware_version) {
+    *version = n->pd_id.version;
+    *model = n->pd_id.model;
+    *vendor_code = n->pd_id.vendor_code;
+    *serial_number = n->pd_id.serial_number;
+    *firmware_version = n->pd_id.firmware_version;
 }
 
 // Notification setters: notifications are decode-only in production (libosdp

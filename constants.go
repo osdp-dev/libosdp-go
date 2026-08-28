@@ -66,22 +66,23 @@ func (l LogLevel) String() string {
 type OsdpCommandType int
 
 const (
-	CmdOutput     OsdpCommandType = C.OSDP_CMD_OUTPUT
-	CmdLED        OsdpCommandType = C.OSDP_CMD_LED
-	CmdBuzzer     OsdpCommandType = C.OSDP_CMD_BUZZER
-	CmdText       OsdpCommandType = C.OSDP_CMD_TEXT
-	CmdKeyset     OsdpCommandType = C.OSDP_CMD_KEYSET
-	CmdComset     OsdpCommandType = C.OSDP_CMD_COMSET
-	CmdFileTx     OsdpCommandType = C.OSDP_CMD_FILE_TX
-	CmdMfg        OsdpCommandType = C.OSDP_CMD_MFG
-	CmdStatus     OsdpCommandType = C.OSDP_CMD_STATUS
-	CmdComsetDone OsdpCommandType = C.OSDP_CMD_COMSET_DONE
-	CmdTDSet      OsdpCommandType = C.OSDP_CMD_TDSET
-	CmdBioRead    OsdpCommandType = C.OSDP_CMD_BIOREAD
-	CmdBioMatch   OsdpCommandType = C.OSDP_CMD_BIOMATCH
-	CmdPIVData    OsdpCommandType = C.OSDP_CMD_PIVDATA
-	CmdGenAuth    OsdpCommandType = C.OSDP_CMD_GENAUTH
-	CmdCRAuth     OsdpCommandType = C.OSDP_CMD_CRAUTH
+	CmdOutput       OsdpCommandType = C.OSDP_CMD_OUTPUT
+	CmdLED          OsdpCommandType = C.OSDP_CMD_LED
+	CmdBuzzer       OsdpCommandType = C.OSDP_CMD_BUZZER
+	CmdText         OsdpCommandType = C.OSDP_CMD_TEXT
+	CmdKeyset       OsdpCommandType = C.OSDP_CMD_KEYSET
+	CmdComset       OsdpCommandType = C.OSDP_CMD_COMSET
+	CmdFileTx       OsdpCommandType = C.OSDP_CMD_FILE_TX
+	CmdMfg          OsdpCommandType = C.OSDP_CMD_MFG
+	CmdStatus       OsdpCommandType = C.OSDP_CMD_STATUS
+	CmdComsetDone   OsdpCommandType = C.OSDP_CMD_COMSET_DONE
+	CmdNotification OsdpCommandType = C.OSDP_CMD_NOTIFICATION
+	CmdTDSet        OsdpCommandType = C.OSDP_CMD_TDSET
+	CmdBioRead      OsdpCommandType = C.OSDP_CMD_BIOREAD
+	CmdBioMatch     OsdpCommandType = C.OSDP_CMD_BIOMATCH
+	CmdPIVData      OsdpCommandType = C.OSDP_CMD_PIVDATA
+	CmdGenAuth      OsdpCommandType = C.OSDP_CMD_GENAUTH
+	CmdCRAuth       OsdpCommandType = C.OSDP_CMD_CRAUTH
 )
 
 // OsdpEventType represents OSDP event types

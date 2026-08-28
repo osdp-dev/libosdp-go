@@ -386,40 +386,7 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			Report: C.GoBytes(unsafe.Pointer(&statusReport[0]), C.int(nrEntries)),
 		}
 	case EvtNotification:
-		nt := NotificationType(C.get_notification_type(cEvent))
-		var payload NotificationData
-		switch nt {
-		case NotificationTypeCommand:
-			var command, success C.int
-			C.get_notification_command(cEvent, &command, &success)
-			payload = NotificationCommand{Command: OsdpCommandType(command), Success: success != 0}
-		case NotificationTypeSCStatus:
-			var active, scbkD C.int
-			C.get_notification_sc_status(cEvent, &active, &scbkD)
-			payload = NotificationSCStatus{Active: active != 0, SCBKD: scbkD != 0}
-		case NotificationTypePDStatus:
-			var online C.int
-			C.get_notification_pd_status(cEvent, &online)
-			payload = NotificationPDStatus{Online: online != 0}
-		case NotificationTypeMPStart, NotificationTypeMPProgress, NotificationTypeMPDone:
-			var mpType, objectID, outcome C.int
-			var total, offset C.uint32_t
-			C.get_notification_mp(cEvent, &mpType, &objectID, &total, &offset, &outcome)
-			payload = NotificationMP{MPType: MPMsgType(mpType), ObjectID: int(objectID), Total: uint32(total), Offset: uint32(offset), Outcome: MPOutcome(outcome)}
-		case NotificationTypePDID:
-			var version, model C.int
-			var vendorCode, serialNumber, firmwareVersion C.uint
-			C.get_notification_pd_id(cEvent, &version, &model, &vendorCode, &serialNumber, &firmwareVersion)
-			payload = NotificationPDID{ID: PdId{
-				Version:       int(version),
-				Model:         int(model),
-				VendorCode:    int(vendorCode),
-				SerialNumber:  int(serialNumber),
-				FirmwareMajor: int((firmwareVersion >> 16) & 0xFF),
-				FirmwareMinor: int((firmwareVersion >> 8) & 0xFF),
-				FirmwareBuild: int(firmwareVersion & 0xFF),
-			}}
-		}
+		nt, payload := decodeNotification(C.event_notif(cEvent))
 		eventData = EventNotification{Type: nt, Payload: payload}
 	default:
 		// For unknown event types, return a basic status event
@@ -431,4 +398,44 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 	return &Event{
 		Event: eventData,
 	}
+}
+
+// decodeNotification reads a libosdp notification, which reaches a CP inside an
+// osdp_event and a PD inside an osdp_cmd.
+func decodeNotification(n *C.struct_osdp_notification) (NotificationType, NotificationData) {
+	nt := NotificationType(C.get_notification_type(n))
+	var payload NotificationData
+	switch nt {
+	case NotificationTypeCommand:
+		var command, success C.int
+		C.get_notification_command(n, &command, &success)
+		payload = NotificationCommand{Command: OsdpCommandType(command), Success: success != 0}
+	case NotificationTypeSCStatus:
+		var active, scbkD C.int
+		C.get_notification_sc_status(n, &active, &scbkD)
+		payload = NotificationSCStatus{Active: active != 0, SCBKD: scbkD != 0}
+	case NotificationTypePDStatus:
+		var online C.int
+		C.get_notification_pd_status(n, &online)
+		payload = NotificationPDStatus{Online: online != 0}
+	case NotificationTypeMPStart, NotificationTypeMPProgress, NotificationTypeMPDone:
+		var mpType, objectID, outcome C.int
+		var total, offset C.uint32_t
+		C.get_notification_mp(n, &mpType, &objectID, &total, &offset, &outcome)
+		payload = NotificationMP{MPType: MPMsgType(mpType), ObjectID: int(objectID), Total: uint32(total), Offset: uint32(offset), Outcome: MPOutcome(outcome)}
+	case NotificationTypePDID:
+		var version, model C.int
+		var vendorCode, serialNumber, firmwareVersion C.uint
+		C.get_notification_pd_id(n, &version, &model, &vendorCode, &serialNumber, &firmwareVersion)
+		payload = NotificationPDID{ID: PdId{
+			Version:       int(version),
+			Model:         int(model),
+			VendorCode:    int(vendorCode),
+			SerialNumber:  int(serialNumber),
+			FirmwareMajor: int((firmwareVersion >> 16) & 0xFF),
+			FirmwareMinor: int((firmwareVersion >> 8) & 0xFF),
+			FirmwareBuild: int(firmwareVersion & 0xFF),
+		}}
+	}
+	return nt, payload
 }

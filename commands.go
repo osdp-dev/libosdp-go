@@ -140,6 +140,17 @@ type CommandTDSet struct {
 
 func (c CommandTDSet) GetType() OsdpCommandType { return CmdTDSet }
 
+// CommandNotification is how a PD receives a libosdp notification (enabled by
+// FlagEnableNotification): it is synthesized locally, never sent by the CP, and
+// cannot be submitted. Payload holds the typed detail for Type; type-assert it
+// to the concrete NotificationData that matches Type.
+type CommandNotification struct {
+	Type    NotificationType
+	Payload NotificationData
+}
+
+func (c CommandNotification) GetType() OsdpCommandType { return CmdNotification }
+
 // commandToC converts a Go Command to a newly malloc'd C osdp_cmd structure.
 // The caller owns the returned memory. It returns an error (and frees the
 // allocation) when a variable-length payload exceeds its C buffer.
@@ -156,6 +167,9 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 	cCmd.flags = C.uint32_t(cmd.Flags)
 
 	switch cmdData := cmd.Command.(type) {
+	case CommandNotification:
+		C.free(unsafe.Pointer(cCmd))
+		return nil, fmt.Errorf("osdp: notifications are synthesized by libosdp and cannot be submitted")
 	case CommandOutput:
 		C.set_cmd_output(cCmd, C.uint8_t(cmdData.OutputNo), C.uint8_t(cmdData.ControlCode), C.uint16_t(cmdData.TimerCount))
 	case CommandLed:
@@ -393,6 +407,9 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
 		C.get_cmd_auth(cCmd, &algorithm, &key, &length, &buf[0])
 		commandData = CommandCRAuth{Algorithm: uint8(algorithm), Key: uint8(key), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case CmdNotification:
+		nt, payload := decodeNotification(C.cmd_notif(cCmd))
+		commandData = CommandNotification{Type: nt, Payload: payload}
 	default:
 		// For unknown commands, return a basic status command
 		commandData = CommandStatus{
