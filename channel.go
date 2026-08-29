@@ -213,8 +213,8 @@ func handlePtr(h uintptr) unsafe.Pointer {
 	return C.uintptr_to_ptr(C.uintptr_t(h))
 }
 
-// CreateOSDPChannel creates an OSDP channel from a Go Channel interface
-func CreateOSDPChannel(ch Channel) *C.struct_osdp_channel {
+// newCChannel creates an OSDP channel from a Go Channel interface
+func newCChannel(ch Channel) *C.struct_osdp_channel {
 	channelMu.Lock()
 	channelCounter++
 	handle := channelCounter
@@ -257,8 +257,8 @@ func channelFlushWrapper(chPtr unsafe.Pointer) {
 	}
 }
 
-// FreeOSDPChannel frees an OSDP channel
-func FreeOSDPChannel(ch *C.struct_osdp_channel) {
+// freeCChannel frees an OSDP channel
+func freeCChannel(ch *C.struct_osdp_channel) {
 	if ch == nil {
 		return
 	}

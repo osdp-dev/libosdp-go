@@ -40,7 +40,7 @@ type PeripheralDevice struct {
 	capabilities           []PdCapability
 	commandHandler         CommandHandler
 	eventCompletionHandler EventCompletionHandler
-	refreshContext         *RefreshContext
+	refreshContext         *refreshLoop
 	mu                     sync.Mutex
 	commandQueue           chan *Command
 	channel                *C.struct_osdp_channel
@@ -71,7 +71,7 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 		capabilities:  capabilities,
 		commandQueue:  make(chan *Command, 100),
 		pendingEvents: make(map[*C.struct_osdp_event]struct{}),
-		refreshContext: &RefreshContext{
+		refreshContext: &refreshLoop{
 			stop:     make(chan bool),
 			stopped:  make(chan bool),
 			interval: 20 * time.Millisecond,
@@ -80,7 +80,7 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 
 	setupLogging(logLevel)
 
-	pd.channel = CreateOSDPChannel(channel)
+	pd.channel = newCChannel(channel)
 
 	cInfo, scbkCleanup := pdInfo.asCStruct()
 	defer scbkCleanup()
@@ -106,7 +106,7 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 
 	pd.ctx = (*C.osdp_t)(C.osdp_pd_setup(pd.channel, &cInfo))
 	if pd.ctx == nil {
-		FreeOSDPChannel(pd.channel)
+		freeCChannel(pd.channel)
 		pd.channel = nil
 		return nil, fmt.Errorf("failed to create OSDP PD context")
 	}
@@ -193,7 +193,7 @@ func (pd *PeripheralDevice) shutdown() {
 		pdMu.Unlock()
 
 		if pd.channel != nil {
-			FreeOSDPChannel(pd.channel)
+			freeCChannel(pd.channel)
 			pd.channel = nil
 		}
 
@@ -202,8 +202,8 @@ func (pd *PeripheralDevice) shutdown() {
 }
 
 // refreshWorker runs the refresh loop in a separate goroutine. It captures its
-// RefreshContext locally so it never races with shutdown clearing the field.
-func (pd *PeripheralDevice) refreshWorker(rc *RefreshContext) {
+// refreshLoop locally so it never races with shutdown clearing the field.
+func (pd *PeripheralDevice) refreshWorker(rc *refreshLoop) {
 	defer close(rc.stopped)
 
 	ticker := time.NewTicker(rc.interval)

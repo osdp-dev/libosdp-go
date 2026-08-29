@@ -39,7 +39,7 @@ type ControlPanel struct {
 	pdInfoList           []*PdInfo
 	eventHandler         EventHandler
 	cmdCompletionHandler CommandCompletionHandler
-	refreshContext       *RefreshContext
+	refreshContext       *refreshLoop
 	mu                   sync.Mutex
 	eventQueues          []chan *Event
 	channel              *C.struct_osdp_channel
@@ -68,7 +68,7 @@ func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (
 		pdInfoList:  pdInfoList,
 		eventQueues: make([]chan *Event, len(pdInfoList)),
 		pendingCmds: make(map[*C.struct_osdp_cmd]struct{}),
-		refreshContext: &RefreshContext{
+		refreshContext: &refreshLoop{
 			stop:     make(chan bool),
 			stopped:  make(chan bool),
 			interval: 20 * time.Millisecond,
@@ -81,7 +81,7 @@ func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (
 
 	setupLogging(logLevel)
 
-	cp.channel = CreateOSDPChannel(channel)
+	cp.channel = newCChannel(channel)
 
 	numPDs := C.int(len(pdInfoList))
 	pdInfoArray := C.malloc(C.size_t(numPDs) * C.size_t(unsafe.Sizeof(C.osdp_pd_info_t{})))
@@ -102,7 +102,7 @@ func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (
 
 	cp.ctx = (*C.osdp_t)(C.osdp_cp_setup(cp.channel, numPDs, (*C.osdp_pd_info_t)(pdInfoArray)))
 	if cp.ctx == nil {
-		FreeOSDPChannel(cp.channel)
+		freeCChannel(cp.channel)
 		cp.channel = nil
 		return nil, fmt.Errorf("failed to create OSDP CP context")
 	}
@@ -189,7 +189,7 @@ func (cp *ControlPanel) shutdown() {
 		cpMu.Unlock()
 
 		if cp.channel != nil {
-			FreeOSDPChannel(cp.channel)
+			freeCChannel(cp.channel)
 			cp.channel = nil
 		}
 
@@ -201,8 +201,8 @@ func (cp *ControlPanel) shutdown() {
 }
 
 // refreshWorker runs the refresh loop in a separate goroutine. It captures its
-// RefreshContext locally so it never races with shutdown clearing the field.
-func (cp *ControlPanel) refreshWorker(rc *RefreshContext) {
+// refreshLoop locally so it never races with shutdown clearing the field.
+func (cp *ControlPanel) refreshWorker(rc *refreshLoop) {
 	defer close(rc.stopped)
 
 	ticker := time.NewTicker(rc.interval)

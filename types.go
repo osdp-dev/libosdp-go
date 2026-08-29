@@ -27,8 +27,8 @@ type CommandCompletionHandler func(pdNumber int, command *Command, status Comple
 // reaches a terminal state (delivered, failed, flushed, aborted).
 type EventCompletionHandler func(event *Event, status CompletionStatus)
 
-// RefreshContext holds the signalling channels for a CP/PD refresh goroutine.
-type RefreshContext struct {
+// refreshLoop holds the signalling channels for a CP/PD refresh goroutine.
+type refreshLoop struct {
 	stop     chan bool
 	stopped  chan bool
 	interval time.Duration
