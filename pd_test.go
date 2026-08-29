@@ -116,3 +116,49 @@ func TestPDReceivesComsetDoneWithAppliedSettings(t *testing.T) {
 		}
 	}
 }
+
+// A reply event returned from the command handler must go out as the reply to
+// that command. The CP dispatches a reply's event before it completes the
+// command, whereas an ACK completes it first and the event trails on a poll.
+func TestPDHandlerReplyIsSentAsDirectReply(t *testing.T) {
+	link := newFIFOLink(t)
+	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
+	vendor := [3]uint8{0x0A, 0x0B, 0x0C}
+	pd.SetCommandHandler(func(cmd *osdp.Command) (int, *osdp.Event) {
+		if cmd.Command.GetType() != osdp.CmdMfg {
+			return 0, nil
+		}
+		return 0, &osdp.Event{Event: osdp.EventMfgReply{VendorCode: vendor, Data: []byte{0x42}}}
+	})
+
+	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode))
+	order := make(chan string, 4)
+	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
+		if ev.Event.GetType() == osdp.EvtMfgReply {
+			order <- "reply"
+		}
+		return 0
+	})
+	cp.SetCommandCompletionHandler(func(_ int, cmd *osdp.Command, _ osdp.CompletionStatus) {
+		if cmd.Command.GetType() == osdp.CmdMfg {
+			order <- "completed"
+		}
+	})
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online")
+	}
+	if err := cp.SubmitCommand(0, &osdp.Command{Command: osdp.CommandMfg{VendorCode: vendor, Data: []byte{1}}}); err != nil {
+		t.Fatalf("SubmitCommand: %v", err)
+	}
+
+	for _, want := range []string{"reply", "completed"} {
+		select {
+		case got := <-order:
+			if got != want {
+				t.Fatalf("CP saw %q before the reply; PD ACKed instead of replying", got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %q", want)
+		}
+	}
+}

@@ -229,7 +229,12 @@ func (pd *PeripheralDevice) refreshWorker(rc *RefreshContext) {
 func (pd *PeripheralDevice) SubmitEvent(event *Event) error {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
+	return pd.submitEventLocked(event)
+}
 
+// submitEventLocked is SubmitEvent for callers already holding pd.mu, such as
+// the command callback, which runs inside osdp_pd_refresh.
+func (pd *PeripheralDevice) submitEventLocked(event *Event) error {
 	if pd.ctx == nil {
 		return fmt.Errorf("peripheral device context is not initialized")
 	}
@@ -378,10 +383,9 @@ func commandCallbackWrapper(data unsafe.Pointer, cCmd *C.struct_osdp_cmd) C.int 
 					return C.int(ret)
 				}
 			}
-			// For other events, send as async notification
-			go func() {
-				pd.SubmitEvent(event)
-			}()
+			// Submitting from inside the callback makes libosdp send this
+			// event as the reply to the command instead of ACK-ing it.
+			pd.submitEventLocked(event)
 		}
 		return C.int(ret)
 	}
