@@ -121,6 +121,8 @@ const (
 	CapSmartCardSupport        PdCapabilityFunction = C.OSDP_PD_CAP_SMART_CARD_SUPPORT
 	CapReaders                 PdCapabilityFunction = C.OSDP_PD_CAP_READERS
 	CapBiometrics              PdCapabilityFunction = C.OSDP_PD_CAP_BIOMETRICS
+	CapSecurePINEntry          PdCapabilityFunction = C.OSDP_PD_CAP_SECURE_PIN_ENTRY
+	CapOSDPVersion             PdCapabilityFunction = C.OSDP_PD_CAP_OSDP_VERSION
 )
 
 // Status report semantics changed upstream: report bytes are now one byte per
