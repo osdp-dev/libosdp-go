@@ -67,7 +67,9 @@ func (cp *ControlPanel) RegisterFileOperations(pdNumber int, fileOps FileOperati
 	fileOpsRegistry[handle] = fileOps
 	fileOpsMu.Unlock()
 
+	// libosdp copies the ops struct, so it only needs to outlive the call.
 	cFileOps := (*C.struct_osdp_file_ops)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
+	defer C.free(unsafe.Pointer(cFileOps))
 	cFileOps.arg = handlePtr(handle)
 	cFileOps.open = (*[0]byte)(C.fileOpenWrapper)
 	cFileOps.read = (*[0]byte)(C.fileReadWrapper)
@@ -79,7 +81,6 @@ func (cp *ControlPanel) RegisterFileOperations(pdNumber int, fileOps FileOperati
 		fileOpsMu.Lock()
 		delete(fileOpsRegistry, handle)
 		fileOpsMu.Unlock()
-		C.free(unsafe.Pointer(cFileOps))
 		return fmt.Errorf("failed to register file operations, error code: %d", ret)
 	}
 
@@ -101,7 +102,9 @@ func (pd *PeripheralDevice) RegisterFileOperations(fileOps FileOperations) error
 	fileOpsRegistry[handle] = fileOps
 	fileOpsMu.Unlock()
 
+	// libosdp copies the ops struct, so it only needs to outlive the call.
 	cFileOps := (*C.struct_osdp_file_ops)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
+	defer C.free(unsafe.Pointer(cFileOps))
 	cFileOps.arg = handlePtr(handle)
 	cFileOps.open = (*[0]byte)(C.fileOpenWrapper)
 	cFileOps.read = (*[0]byte)(C.fileReadWrapper)
@@ -113,7 +116,6 @@ func (pd *PeripheralDevice) RegisterFileOperations(fileOps FileOperations) error
 		fileOpsMu.Lock()
 		delete(fileOpsRegistry, handle)
 		fileOpsMu.Unlock()
-		C.free(unsafe.Pointer(cFileOps))
 		return fmt.Errorf("failed to register file operations, error code: %d", ret)
 	}
 
