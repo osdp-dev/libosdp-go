@@ -78,7 +78,7 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 		},
 	}
 
-	InitializeLogging("osdp-pd", logLevel)
+	setupLogging(logLevel)
 
 	pd.channel = CreateOSDPChannel(channel)
 

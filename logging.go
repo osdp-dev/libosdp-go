@@ -18,11 +18,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"unsafe"
+	"sync/atomic"
 )
 
 // LogHandler represents a function that handles log messages from LibOSDP.
-// pd is the PD index that produced the log (-1 for global/non-PD-scoped messages).
+// pd is the address of the PD that produced the log (-1 for global/non-PD-scoped
+// messages).
 type LogHandler func(pd int, level LogLevel, file string, line int, message string)
 
 var (
@@ -31,7 +32,16 @@ var (
 	// must be synchronized.
 	logMu            sync.RWMutex
 	globalLogHandler LogHandler
+
+	// libosdp skips level filtering once a log callback is installed, so it is
+	// done here. Like the handler it is process-global: the most recent
+	// NewControlPanel/NewPeripheralDevice/InitializeLogging level applies.
+	logLevelFilter atomic.Int32
 )
+
+func init() {
+	logLevelFilter.Store(int32(LogInfo))
+}
 
 // SetLogHandler sets a custom log handler for LibOSDP messages
 func SetLogHandler(handler LogHandler) {
@@ -131,11 +141,24 @@ func InitializeLogging(name string, level LogLevel) {
 	// Set up standard Go logger as default
 	SetStandardLogger(log.Default(), fmt.Sprintf("[%s]", name))
 
-	// Initialize LibOSDP logger with the specified level
-	nameC := C.CString(name)
-	defer C.free(unsafe.Pointer(nameC))
+	logLevelFilter.Store(int32(level))
+}
 
-	C.osdp_logger_init(nameC, C.int(level), nil)
+// setupLogging prepares logging for a new CP/PD context. Each context copies
+// libosdp's default logger at setup, so the Go callback must be the default by
+// then; a handler the application already installed is kept.
+func setupLogging(level LogLevel) {
+	logMu.RLock()
+	haveHandler := globalLogHandler != nil
+	logMu.RUnlock()
+	if haveHandler {
+		C.set_log_callback_wrapper()
+	} else {
+		// It outlives this context and serves every later one too, so
+		// the prefix must not name this one.
+		SetStandardLogger(log.Default(), "[osdp]")
+	}
+	logLevelFilter.Store(int32(level))
 }
 
 // logCallbackWrapper is the C callback wrapper that bridges LibOSDP logs to Go
@@ -145,7 +168,7 @@ func logCallbackWrapper(pd C.int, level C.int, msg *C.char, file *C.char, line C
 	logMu.RLock()
 	handler := globalLogHandler
 	logMu.RUnlock()
-	if handler == nil {
+	if handler == nil || int32(level) > logLevelFilter.Load() {
 		return
 	}
 

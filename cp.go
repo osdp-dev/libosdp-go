@@ -79,7 +79,7 @@ func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (
 		cp.eventQueues[i] = make(chan *Event, 100)
 	}
 
-	InitializeLogging("osdp-cp", logLevel)
+	setupLogging(logLevel)
 
 	cp.channel = CreateOSDPChannel(channel)
 
