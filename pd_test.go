@@ -78,3 +78,41 @@ func TestSubmitCommandRejectsNotification(t *testing.T) {
 		t.Fatal("SubmitCommand accepted a synthesized notification")
 	}
 }
+
+func TestPDReceivesComsetDoneWithAppliedSettings(t *testing.T) {
+	link := newFIFOLink(t)
+	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
+
+	cmds := make(chan *osdp.Command, 8)
+	pd.SetCommandHandler(func(cmd *osdp.Command) (int, *osdp.Event) {
+		cmds <- cmd
+		return 0, nil
+	})
+
+	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode))
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online")
+	}
+	// Re-apply the current settings so the link survives the change.
+	want := osdp.CommandComset{Address: 1, BaudRate: 9600}
+	if err := cp.SubmitCommand(0, &osdp.Command{Command: want}); err != nil {
+		t.Fatalf("SubmitCommand: %v", err)
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case cmd := <-cmds:
+			if cmd.Command.GetType() != osdp.CmdComsetDone {
+				continue
+			}
+			got, ok := cmd.Command.(osdp.CommandComsetDone)
+			if !ok || got.Address != want.Address || got.BaudRate != want.BaudRate {
+				t.Fatalf("COMSET_DONE = %#v, want settings %+v", cmd.Command, want)
+			}
+			return
+		case <-deadline:
+			t.Fatal("PD never reported COMSET_DONE")
+		}
+	}
+}

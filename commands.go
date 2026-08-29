@@ -108,6 +108,16 @@ type CommandComset struct {
 
 func (c CommandComset) GetType() OsdpCommandType { return CmdComset }
 
+// CommandComsetDone tells a PD that the settings from an earlier CommandComset
+// are now in effect; the application should persist them. It is synthesized by
+// libosdp on the PD and cannot be submitted.
+type CommandComsetDone struct {
+	Address  uint8
+	BaudRate uint32
+}
+
+func (c CommandComsetDone) GetType() OsdpCommandType { return CmdComsetDone }
+
 // CommandFileTx represents file transfer command
 type CommandFileTx struct {
 	ID    int32
@@ -167,9 +177,9 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 	cCmd.flags = C.uint32_t(cmd.Flags)
 
 	switch cmdData := cmd.Command.(type) {
-	case CommandNotification:
+	case CommandNotification, CommandComsetDone:
 		C.free(unsafe.Pointer(cCmd))
-		return nil, fmt.Errorf("osdp: notifications are synthesized by libosdp and cannot be submitted")
+		return nil, fmt.Errorf("osdp: %T is synthesized by libosdp and cannot be submitted", cmdData)
 	case CommandOutput:
 		C.set_cmd_output(cCmd, C.uint8_t(cmdData.OutputNo), C.uint8_t(cmdData.ControlCode), C.uint16_t(cmdData.TimerCount))
 	case CommandLed:
@@ -357,13 +367,14 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 			KeyType: uint8(keysetType),
 			Data:    C.GoBytes(unsafe.Pointer(&keysetData[0]), C.int(length)),
 		}
-	case CmdComset:
+	case CmdComset, CmdComsetDone:
 		var address C.uint8_t
 		var baudRate C.uint32_t
 		C.get_cmd_comset(cCmd, &address, &baudRate)
-		commandData = CommandComset{
-			Address:  uint8(address),
-			BaudRate: uint32(baudRate),
+		if OsdpCommandType(cCmd.id) == CmdComsetDone {
+			commandData = CommandComsetDone{Address: uint8(address), BaudRate: uint32(baudRate)}
+		} else {
+			commandData = CommandComset{Address: uint8(address), BaudRate: uint32(baudRate)}
 		}
 	case CmdFileTx:
 		var id C.int
