@@ -71,7 +71,7 @@ func main() {
 
 	led := &osdp.Command{Command: osdp.CommandLed{
 		Reader: 0, LedNumber: 0,
-		Permanent: osdp.LedParams{ControlCode: 1, OnCount: 10, OffCount: 0, OnColor: osdp.LEDColorGreen},
+		Permanent: osdp.LedParams{ControlCode: osdp.LEDPermanentCCSet, OnCount: 10, OffCount: 0, OnColor: osdp.LEDColorGreen},
 	}}
 	if err := cp.SubmitCommand(0, led); err != nil {
 		log.Print(err)

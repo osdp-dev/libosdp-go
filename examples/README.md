@@ -60,7 +60,7 @@ ledCmd := &osdp.Command{
     Command: osdp.CommandLed{
         LedNumber: 0,
         Permanent: osdp.LedParams{
-            ControlCode: 1,
+            ControlCode: osdp.LEDPermanentCCSet,
             OnColor:     osdp.LEDColorGreen,
         },
     },

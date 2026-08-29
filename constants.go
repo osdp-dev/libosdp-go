@@ -103,6 +103,37 @@ const (
 	EvtCRAuthR      OsdpEventType = C.OSDP_EVENT_CRAUTHR
 )
 
+// Control codes for the ControlCode fields of CommandOutput, LedParams,
+// CommandBuzzer and CommandText. They are untyped so they assign directly to
+// those uint8 fields.
+const (
+	OutputCCNop                    = C.OSDP_CMD_OUTPUT_CC_NOP
+	OutputCCPermanentOff           = C.OSDP_CMD_OUTPUT_CC_PERMANENT_OFF
+	OutputCCPermanentOn            = C.OSDP_CMD_OUTPUT_CC_PERMANENT_ON
+	OutputCCPermanentOffAllowTimed = C.OSDP_CMD_OUTPUT_CC_PERMANENT_OFF_ALLOW_TIMED
+	OutputCCPermanentOnAllowTimed  = C.OSDP_CMD_OUTPUT_CC_PERMANENT_ON_ALLOW_TIMED
+	OutputCCTemporaryOn            = C.OSDP_CMD_OUTPUT_CC_TEMPORARY_ON
+	OutputCCTemporaryOff           = C.OSDP_CMD_OUTPUT_CC_TEMPORARY_OFF
+
+	// LedParams.ControlCode for CommandLed.Temporary
+	LEDTemporaryCCNop    = C.OSDP_CMD_LED_TEMPORARY_CC_NOP
+	LEDTemporaryCCCancel = C.OSDP_CMD_LED_TEMPORARY_CC_CANCEL
+	LEDTemporaryCCSet    = C.OSDP_CMD_LED_TEMPORARY_CC_SET
+
+	// LedParams.ControlCode for CommandLed.Permanent
+	LEDPermanentCCNop = C.OSDP_CMD_LED_PERMANENT_CC_NOP
+	LEDPermanentCCSet = C.OSDP_CMD_LED_PERMANENT_CC_SET
+
+	BuzzerCCNoTone      = C.OSDP_CMD_BUZZER_CC_NO_TONE
+	BuzzerCCOff         = C.OSDP_CMD_BUZZER_CC_OFF
+	BuzzerCCDefaultTone = C.OSDP_CMD_BUZZER_CC_DEFAULT_TONE
+
+	TextCCPermanentNoWrap = C.OSDP_CMD_TEXT_CC_PERMANENT_NO_WRAP
+	TextCCPermanentWrap   = C.OSDP_CMD_TEXT_CC_PERMANENT_WRAP
+	TextCCTemporaryNoWrap = C.OSDP_CMD_TEXT_CC_TEMPORARY_NO_WRAP
+	TextCCTemporaryWrap   = C.OSDP_CMD_TEXT_CC_TEMPORARY_WRAP
+)
+
 // PdCapabilityFunction represents PD capability function codes
 type PdCapabilityFunction int
 

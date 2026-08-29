@@ -303,7 +303,7 @@ func testLEDCommands(cp *osdp.ControlPanel) {
 				Reader:    0,
 				LedNumber: uint8(i % 2), // Alternate between LED 0 and 1
 				Permanent: osdp.LedParams{
-					ControlCode: 1,
+					ControlCode: osdp.LEDPermanentCCSet,
 					OnCount:     10,
 					OffCount:    0,
 					OnColor:     colorInfo.color,
@@ -333,7 +333,7 @@ func testBuzzerCommands(cp *osdp.ControlPanel) {
 		buzzerCmd := &osdp.Command{
 			Command: osdp.CommandBuzzer{
 				Reader:      0,
-				ControlCode: 2, // Default tone
+				ControlCode: osdp.BuzzerCCDefaultTone,
 				OnCount:     uint8(pattern.onTime),
 				OffCount:    uint8(pattern.offTime),
 				RepCount:    uint8(pattern.count),
@@ -359,7 +359,7 @@ func testTextCommands(cp *osdp.ControlPanel) {
 		textCmd := &osdp.Command{
 			Command: osdp.CommandText{
 				Reader:      0,
-				ControlCode: 1, // Permanent text
+				ControlCode: osdp.TextCCPermanentNoWrap,
 				TempTime:    0,
 				OffsetRow:   0,
 				OffsetCol:   0,
@@ -382,10 +382,10 @@ func testOutputCommands(cp *osdp.ControlPanel) {
 		output, control, timer int
 		description            string
 	}{
-		{0, 5, 30, "Output 0 ON for 3 seconds"},
-		{1, 5, 50, "Output 1 ON for 5 seconds"},
-		{2, 2, 0, "Output 2 permanently ON"},
-		{2, 1, 0, "Output 2 permanently OFF"},
+		{0, osdp.OutputCCTemporaryOn, 30, "Output 0 ON for 3 seconds"},
+		{1, osdp.OutputCCTemporaryOn, 50, "Output 1 ON for 5 seconds"},
+		{2, osdp.OutputCCPermanentOn, 0, "Output 2 permanently ON"},
+		{2, osdp.OutputCCPermanentOff, 0, "Output 2 permanently OFF"},
 	}
 
 	for _, out := range outputs {

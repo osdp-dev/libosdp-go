@@ -137,7 +137,7 @@ func main() {
 						Reader:    0,
 						LedNumber: 0,
 						Permanent: osdp.LedParams{
-							ControlCode: 1, // Permanent ON
+							ControlCode: osdp.LEDPermanentCCSet,
 							OnCount:     10,
 							OffCount:    0,
 							OnColor:     color,
@@ -160,7 +160,7 @@ func main() {
 					buzzerCmd := &osdp.Command{
 						Command: osdp.CommandBuzzer{
 							Reader:      0,
-							ControlCode: 2, // Default tone
+							ControlCode: osdp.BuzzerCCDefaultTone,
 							OnCount:     5, // 50ms
 							OffCount:    5, // 50ms
 							RepCount:    3, // 3 beeps

@@ -189,7 +189,7 @@ func main() {
 						Reader:    0,
 						LedNumber: 0,
 						Permanent: osdp.LedParams{
-							ControlCode: 1,
+							ControlCode: osdp.LEDPermanentCCSet,
 							OnCount:     10,
 							OffCount:    0,
 							OnColor:     color,
@@ -208,7 +208,7 @@ func main() {
 				buzzerCmd := &osdp.Command{
 					Command: osdp.CommandBuzzer{
 						Reader:      0,
-						ControlCode: 2, // Default tone
+						ControlCode: osdp.BuzzerCCDefaultTone,
 						OnCount:     2, // 200ms
 						OffCount:    1, // 100ms
 						RepCount:    3, // 3 beeps
@@ -227,7 +227,7 @@ func main() {
 					textCmd := &osdp.Command{
 						Command: osdp.CommandText{
 							Reader:      0,
-							ControlCode: 1, // Permanent text
+							ControlCode: osdp.TextCCPermanentNoWrap,
 							TempTime:    0,
 							OffsetRow:   0,
 							OffsetCol:   0,
@@ -248,8 +248,8 @@ func main() {
 					outputCmd := &osdp.Command{
 						Command: osdp.CommandOutput{
 							OutputNo:    uint8(commandIndex % 2), // Alternate between outputs 0 and 1
-							ControlCode: 5,                       // Temporary ON
-							TimerCount:  50,                      // 5 seconds (units of 100ms)
+							ControlCode: osdp.OutputCCTemporaryOn,
+							TimerCount:  50, // 5 seconds (units of 100ms)
 						},
 					}
 					err := cp.SubmitCommand(pdIndex, outputCmd)
