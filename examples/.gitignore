@@ -9,6 +9,7 @@ logging/logging
 multi_pd_cp/multi_pd_cp
 multi_pd_device/multi_pd_device
 pd_sample/pd_sample
+secure_channel/secure_channel
 
 # Windows executables
 *.exe

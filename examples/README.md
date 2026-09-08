@@ -10,11 +10,12 @@ Each subdirectory contains a complete, runnable example:
 |---------|-------------|
 | **api_showcase** | Comprehensive demonstration of all OSDP commands and events |
 | **cp_sample** | Basic Control Panel example with LED and buzzer commands |
-| **file_transfer_example** | File transfer functionality between CP and PD |
-| **logging_example** | Different logging configurations and formats |
+| **file_transfer** | File transfer functionality between CP and PD |
+| **logging** | Different logging configurations and formats |
 | **multi_pd_cp** | Control Panel managing multiple Peripheral Devices |
 | **multi_pd_device** | Multiple PD simulation with different capabilities |
 | **pd_sample** | Basic Peripheral Device example with event generation |
+| **secure_channel** | Provision a PD's SCBK in install mode, then enforce the secure channel (self-contained, no hardware) |
 
 ## Building and Running
 
