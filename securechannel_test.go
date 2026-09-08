@@ -172,3 +172,43 @@ success:
 	t.Log("Test: Secure channel establishment successful")
 	// Don't wait for goroutines as they may be blocked on PD operations
 }
+
+func TestSecureChannelWaitHelpers(t *testing.T) {
+	scbk, err := osdp.GenKey(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := newFIFOLink(t)
+	pdInfo := testPdInfo(0)
+	pdInfo.SCBK = scbk
+	pd := startTestPD(t, link, pdInfo, []osdp.PdCapability{
+		{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
+	})
+	cpInfo := testPdInfo(osdp.FlagEnforceSecure)
+	cpInfo.SCBK = scbk
+	cp := startTestCP(t, link, cpInfo)
+
+	if !cp.OnlineWaitAll(10 * time.Second) {
+		t.Fatal("OnlineWaitAll timed out")
+	}
+	if !cp.SCWait(0, 10*time.Second) || !cp.SCWaitAll(time.Second) {
+		t.Fatal("CP never reported an active secure channel")
+	}
+	if !pd.SCWait(5 * time.Second) {
+		t.Fatal("PD never reported an active secure channel")
+	}
+	if mask, err := cp.SCStatus(); err != nil || mask != 1 {
+		t.Errorf("SCStatus = %#x, %v; want 0x1", mask, err)
+	}
+	if n, err := cp.GetNumSCActive(); err != nil || n != 1 {
+		t.Errorf("GetNumSCActive = %d, %v; want 1", n, err)
+	}
+
+	pd.Stop()
+	if !cp.OfflineWait(0, 15*time.Second) {
+		t.Fatal("CP did not notice the PD going away")
+	}
+	if cp.SCWait(0, 100*time.Millisecond) {
+		t.Error("SCWait reported an active channel for an offline PD")
+	}
+}
