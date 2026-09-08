@@ -7,6 +7,7 @@
 package osdp_test
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 	"time"
@@ -210,5 +211,58 @@ func TestSecureChannelWaitHelpers(t *testing.T) {
 	}
 	if cp.SCWait(0, 100*time.Millisecond) {
 		t.Error("SCWait reported an active channel for an offline PD")
+	}
+}
+
+// A factory-fresh PD (install mode, no key) is provisioned by a CP that holds
+// the SCBK, persists the key from the KEYSET command, and after a restart
+// talks only over a secure channel with that key.
+func TestInstallModeProvisioningThenEnforcedSecureChannel(t *testing.T) {
+	scbk, err := osdp.GenKey(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpInfo := testPdInfo(osdp.FlagInstallMode)
+	cpInfo.SCBK = scbk
+
+	link := newFIFOLink(t)
+	fresh := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), []osdp.PdCapability{
+		{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
+	})
+	persisted := make(chan []byte, 1)
+	fresh.SetCommandHandler(func(cmd *osdp.Command) (int, *osdp.Event) {
+		if ks, ok := cmd.Command.(osdp.CommandKeyset); ok {
+			persisted <- append([]byte(nil), ks.Data...)
+		}
+		return 0, nil
+	})
+	cp := startTestCP(t, link, cpInfo)
+
+	var stored []byte
+	select {
+	case stored = <-persisted:
+	case <-time.After(15 * time.Second):
+		t.Fatal("PD never received the SCBK")
+	}
+	if !bytes.Equal(stored, scbk) {
+		t.Fatalf("PD was given %x, want %x", stored, scbk)
+	}
+	if !cp.SCWait(0, 10*time.Second) {
+		t.Fatal("secure channel did not come up with the provisioned key")
+	}
+	cp.Stop()
+	fresh.Stop()
+
+	link = newFIFOLink(t)
+	pdInfo := testPdInfo(0)
+	pdInfo.SCBK = stored
+	startTestPD(t, link, pdInfo, []osdp.PdCapability{
+		{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
+	})
+	cpInfo = testPdInfo(osdp.FlagEnforceSecure)
+	cpInfo.SCBK = scbk
+	cp = startTestCP(t, link, cpInfo)
+	if !cp.SCWait(0, 10*time.Second) {
+		t.Fatal("enforced secure channel did not come up after provisioning")
 	}
 }
