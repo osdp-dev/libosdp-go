@@ -19,7 +19,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -108,8 +107,11 @@ func main() {
 	}
 	fmt.Printf("CP: SCBK for PD %d stored at %s\n", pdAddress, cpKeys.KeyFile("pd-101"))
 
-	// Phase 1: provision.
-	pdKeyFile := filepath.Join(dir, "pd-flash.key")
+	// Phase 1: provision. The PD keeps its key in its own store ("flash").
+	pdKeys, err := osdp.NewKeyStore(dir)
+	if err != nil {
+		log.Fatal(err)
+	}
 	l := newLink(dir, "install")
 	pd := startPD(l, pdInfo(osdp.FlagInstallMode, nil), func(cmd *osdp.Command) (int, *osdp.Event) {
 		ks, ok := cmd.Command.(osdp.CommandKeyset)
@@ -117,8 +119,8 @@ func main() {
 			return 0, nil
 		}
 		// Returning 0 accepts the key; libosdp switches to it once the
-		// CP acknowledges. A real PD writes it to non-volatile storage.
-		if err := os.WriteFile(pdKeyFile, []byte(hex.EncodeToString(ks.Data)), 0o600); err != nil {
+		// CP acknowledges. Persist it first so it survives a restart.
+		if pdKeys.SetKey("own-scbk", ks.Data) != nil || pdKeys.CommitKey("own-scbk") != nil {
 			return -1, nil
 		}
 		fmt.Println("PD: received and stored a new SCBK")
@@ -133,11 +135,7 @@ func main() {
 	pd.Stop()
 
 	// Phase 2: restart the PD from its stored key and enforce the channel.
-	stored, err := os.ReadFile(pdKeyFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	pdKey, err := hex.DecodeString(string(stored))
+	pdKey, err := pdKeys.LoadKey("own-scbk", 16)
 	if err != nil {
 		log.Fatal(err)
 	}

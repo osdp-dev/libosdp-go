@@ -88,12 +88,14 @@ func (ks *KeyStore) NewKey(name string, keyLen int, force bool) ([]byte, error) 
 	return key, nil
 }
 
-// UpdateKey replaces the in-memory key for an existing name.
-func (ks *KeyStore) UpdateKey(name string, key []byte) error {
-	if _, ok := ks.keys[name]; !ok {
-		return fmt.Errorf("key %q not found", name)
+// SetKey stores a copy of key under name, adding or replacing it. A PD uses
+// it to keep the SCBK it receives in a CommandKeyset; call CommitKey to
+// persist it.
+func (ks *KeyStore) SetKey(name string, key []byte) error {
+	if len(key) == 0 {
+		return fmt.Errorf("key %q is empty", name)
 	}
-	ks.keys[name] = key
+	ks.keys[name] = append([]byte(nil), key...)
 	return nil
 }
 
