@@ -55,7 +55,8 @@ type ControlPanel struct {
 }
 
 // NewControlPanel creates a new Control Panel instance.
-// channel is the shared multi-drop bus that all PDs in pdInfoList sit on.
+// channel is the shared multi-drop bus that all PDs in pdInfoList sit on. The
+// CP starts talking on the bus before this returns; call Stop to shut it down.
 func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (*ControlPanel, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is required")
@@ -124,13 +125,6 @@ func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (
 	go cp.refreshWorker(cp.refreshContext)
 
 	return cp, nil
-}
-
-// Start starts the control panel operations (explicit start for better control)
-func (cp *ControlPanel) Start() error {
-	// Control panel is started automatically in NewControlPanel
-	// This method is provided for API consistency with Python bindings
-	return nil
 }
 
 // Stop stops the control panel and releases all associated resources.

@@ -57,7 +57,8 @@ type PeripheralDevice struct {
 }
 
 // NewPeripheralDevice creates a new Peripheral Device instance.
-// channel is the bus this PD is attached to.
+// channel is the bus this PD is attached to. The PD starts serving the bus
+// before this returns; call Stop to shut it down.
 func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapability, logLevel LogLevel) (*PeripheralDevice, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is required")
@@ -128,13 +129,6 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 	go pd.refreshWorker(pd.refreshContext)
 
 	return pd, nil
-}
-
-// Start starts the peripheral device operations (explicit start for better control)
-func (pd *PeripheralDevice) Start() error {
-	// Peripheral device is started automatically in NewPeripheralDevice
-	// This method is provided for API consistency with Python bindings
-	return nil
 }
 
 // Stop stops the peripheral device and releases all associated resources.
