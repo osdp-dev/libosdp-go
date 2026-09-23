@@ -24,16 +24,6 @@ func newCNotificationEvent() *C.struct_osdp_event {
 	return e
 }
 
-func buildNotificationCommand(command OsdpCommandType, success bool) *C.struct_osdp_event {
-	e := newCNotificationEvent()
-	s := 0
-	if success {
-		s = 1
-	}
-	C.set_notification_command(e, C.int(command), C.int(s))
-	return e
-}
-
 func buildNotificationSCStatus(active, scbkD bool) *C.struct_osdp_event {
 	e := newCNotificationEvent()
 	a, d := 0, 0

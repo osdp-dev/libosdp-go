@@ -8,22 +8,6 @@ package osdp
 
 import "testing"
 
-func TestNotificationCommandDecode(t *testing.T) {
-	e := buildNotificationCommand(CmdOutput, true)
-	defer freeEvent(e)
-	n := decodeEvent(e).Event.(EventNotification)
-	if n.Type != NotificationTypeCommand {
-		t.Fatalf("Type = %v, want NotificationTypeCommand", n.Type)
-	}
-	p, ok := n.Payload.(NotificationCommand)
-	if !ok {
-		t.Fatalf("payload = %T, want NotificationCommand", n.Payload)
-	}
-	if p.Command != CmdOutput || !p.Success {
-		t.Errorf("payload = %+v", p)
-	}
-}
-
 func TestNotificationSCStatusDecode(t *testing.T) {
 	e := buildNotificationSCStatus(true, false)
 	defer freeEvent(e)

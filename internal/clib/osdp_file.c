@@ -53,8 +53,9 @@ static inline void file_state_reset(struct osdp_pd *pd)
 	f->errors = 0;
 	f->is_open = false;
 	f->keep_alive_pending = false;
+	f->finalize_tstamp = 0;
 	f->file_id = 0;
-	f->cancel_req = false;
+	f->in_terminal = false;
 	osdp_mp_reset(&f->mp);
 	osdp_mp_bind_ops(&f->mp, &ops);
 	osdp_mp_set_event_cb(&f->mp, osdp_mp_pd_notify, pd);
@@ -78,6 +79,11 @@ static void file_transition_done(struct osdp_pd *pd,
 				 enum osdp_mp_outcome outcome)
 {
 	struct osdp_file *f = TO_FILE(pd);
+
+	/* Held for the whole terminal, callback included; the trailing
+	 * file_state_reset() is what clears it, and it is the only way out of
+	 * this function. */
+	f->in_terminal = true;
 
 	/* If a terminal is reached before the first osdp_file_tx_get_command()
 	 * tick emitted START (e.g. an abort on the CP going offline), emit it
@@ -108,6 +114,23 @@ static enum osdp_mp_outcome file_outcome_from_wire_status(int16_t status)
 	case OSDP_FILE_TX_STATUS_ERR_ABORT:
 	default:
 		return OSDP_MP_OUTCOME_ABORTED;
+	}
+}
+
+static int16_t file_wire_status_from_outcome(enum osdp_mp_outcome outcome)
+{
+	switch (outcome) {
+	case OSDP_MP_OUTCOME_OK:
+		return OSDP_FILE_TX_STATUS_CONTENTS_PROCESSED;
+	case OSDP_MP_OUTCOME_OK_REBOOTING:
+		return OSDP_FILE_TX_STATUS_PD_RESET;
+	case OSDP_MP_OUTCOME_UNRECOGNIZED:
+		return OSDP_FILE_TX_STATUS_ERR_UNKNOWN;
+	case OSDP_MP_OUTCOME_INVALID:
+		return OSDP_FILE_TX_STATUS_ERR_INVALID;
+	case OSDP_MP_OUTCOME_ABORTED:
+	default:
+		return OSDP_FILE_TX_STATUS_ERR_ABORT;
 	}
 }
 
@@ -420,11 +443,34 @@ int osdp_file_cmd_stat_build(struct osdp_pd *pd, uint8_t *buf, int max_len)
 	 * bound in the engine is the real guard.
 	 */
 	if (f->mp.offset == f->mp.total && f->mp.total != 0) { /* EOF */
-		stat.status = OSDP_FILE_TX_STATUS_CONTENTS_PROCESSED;
-		LOG_INF("TX_Decode: File receive complete");
-		file_transition_done(pd, OSDP_MP_OUTCOME_OK);
+		enum osdp_mp_outcome outcome = OSDP_MP_OUTCOME_OK;
+		uint16_t delay = 0;
+
+		if (f->ops.finalize &&
+		    !f->ops.finalize(f->ops.arg, &outcome, &delay)) {
+			/* App is still working on what it received. Hold the
+			 * transfer open: the CP parks on this status and pings
+			 * us, which lands back here for another ask. */
+			if (f->finalize_tstamp == 0) {
+				f->finalize_tstamp = osdp_millis_now();
+			}
+			if (osdp_millis_since(f->finalize_tstamp) <
+			    OSDP_FILE_FINALIZE_TIMEOUT_MS) {
+				stat.status = OSDP_FILE_TX_STATUS_KEEP_ALIVE;
+				stat.delay = delay;
+				goto serialize;
+			}
+			LOG_ERR("Stat_Build: finalize timed out after %d ms",
+				OSDP_FILE_FINALIZE_TIMEOUT_MS);
+			outcome = OSDP_MP_OUTCOME_ABORTED;
+		}
+		stat.status = file_wire_status_from_outcome(outcome);
+		LOG_INF("Stat_Build: File receive complete; outcome:%d",
+			outcome);
+		file_transition_done(pd, outcome);
 	}
 
+serialize:
 	/* fill the packet buffer (layout: struct osdp_cmd_file_stat) */
 
 	bwrite_u8(stat.control, buf, &len);
@@ -436,6 +482,22 @@ int osdp_file_cmd_stat_build(struct osdp_pd *pd, uint8_t *buf, int max_len)
 }
 
 /* --- State Management --- */
+
+int osdp_file_tx_request_cancel(struct osdp_pd *pd)
+{
+	struct osdp_file *f = TO_FILE(pd);
+
+	if (!osdp_file_tx_is_active(pd)) {
+		return -1;
+	}
+	/*
+	 * Cooperative, not immediate: the transfer ends on the next refresh
+	 * tick, which is also where CMD_ABORT goes out to the PD. Tearing it
+	 * down here would skip that and leave the PD waiting.
+	 */
+	osdp_mp_request_cancel(&f->mp);
+	return 0;
+}
 
 void osdp_file_tx_abort(struct osdp_pd *pd)
 {
@@ -464,7 +526,8 @@ int osdp_file_tx_get_command(struct osdp_pd *pd)
 	 * refresh context, before any fragment (PROGRESS) or terminal (DONE). */
 	osdp_mp_emit_start(&f->mp);
 
-	if (f->errors > OSDP_FILE_ERROR_RETRY_MAX || f->cancel_req) {
+	if (f->errors > OSDP_FILE_ERROR_RETRY_MAX ||
+	    osdp_mp_cancel_requested(&f->mp)) {
 		LOG_ERR("Aborting transfer of file fd:%d", f->file_id);
 		file_transition_done(pd, OSDP_MP_OUTCOME_ABORTED);
 		return CMD_ABORT;
@@ -495,21 +558,14 @@ int osdp_file_tx_command(struct osdp_pd *pd, int file_id, uint32_t flags)
 		return -1;
 	}
 
-	if (osdp_file_tx_is_active(pd)) {
-		if (flags & OSDP_CMD_FILE_TX_FLAG_CANCEL) {
-			if (file_id == f->file_id) {
-				f->cancel_req = true;
-				return 0;
-			}
-			LOG_ERR("TX_init: invalid cancel request; no such tx!");
-			return -1;
-		}
-		LOG_ERR("TX_init: A file tx is already in progress");
+	if (f->in_terminal) {
+		LOG_ERR("TX_init: cannot start a transfer from inside a "
+			"file-transfer completion");
 		return -1;
 	}
 
-	if (flags & OSDP_CMD_FILE_TX_FLAG_CANCEL) {
-		LOG_ERR("TX_init: invalid cancel request");
+	if (osdp_file_tx_is_active(pd)) {
+		LOG_ERR("TX_init: A file tx is already in progress");
 		return -1;
 	}
 
@@ -575,12 +631,20 @@ int osdp_file_register_ops(osdp_t *ctx, int pd_idx,
 		}
 		memset(pd->file, 0, sizeof(struct osdp_file));
 #else
-		pd->file = calloc(1, sizeof(struct osdp_file));
+		pd->file = osdp_calloc(1, sizeof(struct osdp_file));
 		if (pd->file == NULL) {
 			LOG_PRINT("Failed to alloc struct osdp_file");
 			return -1;
 		}
 #endif
+	}
+
+	if (osdp_file_tx_is_active(pd)) {
+		/* Resetting under a live transfer orphans the command the
+		 * engine holds; end it properly first. Done before the ops are
+		 * swapped so the open file is closed by the ops that opened
+		 * it. */
+		osdp_file_tx_abort(pd);
 	}
 
 	memcpy(&pd->file->ops, ops, sizeof(struct osdp_file_ops));

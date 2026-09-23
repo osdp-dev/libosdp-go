@@ -11,8 +11,8 @@
 /* Per-family wiring of the §5.10 smartcard/PIV multi-part consumers. */
 struct piv_family {
 	int mp_msg;
-	uint8_t app_cmd;    /* OSDP_CMD_* */
-	uint8_t wire_cmd;   /* CMD_* */
+	uint8_t app_cmd; /* OSDP_CMD_* */
+	uint8_t wire_cmd; /* CMD_* */
 	uint8_t wire_reply; /* REPLY_* */
 	uint8_t event_type; /* OSDP_EVENT_* */
 };
@@ -99,7 +99,7 @@ static struct osdp_piv *piv_get(struct osdp_pd *pd)
 			memset(pd->piv, 0, sizeof(struct osdp_piv));
 		}
 #else
-		pd->piv = calloc(1, sizeof(struct osdp_piv));
+		pd->piv = osdp_calloc(1, sizeof(struct osdp_piv));
 #endif
 		if (pd->piv == NULL) {
 			LOG_ERR("PIV: failed to allocate context");
@@ -156,6 +156,18 @@ bool osdp_piv_is_active(struct osdp_pd *pd)
 bool osdp_piv_owns_cmd(struct osdp_pd *pd, int cmd_id)
 {
 	return osdp_piv_is_active(pd) && TO_PIV(pd)->wire_cmd == cmd_id;
+}
+
+int osdp_piv_request_cancel(struct osdp_pd *pd, int mp_msg)
+{
+	struct osdp_piv *p = TO_PIV(pd);
+
+	if (!p || p->phase == OSDP_PIV_IDLE || p->mp_msg != mp_msg) {
+		return -1;
+	}
+	/* Consumed by osdp_piv_cp_get_command(), which also sends CMD_ABORT. */
+	osdp_mp_request_cancel(&p->mp);
+	return 0;
 }
 
 void osdp_piv_abort(struct osdp_pd *pd)
@@ -225,8 +237,11 @@ int osdp_piv_cp_get_command(struct osdp_pd *pd)
 	if (!p || p->phase == OSDP_PIV_IDLE) {
 		return 0;
 	}
-	if (osdp_millis_since(p->tstamp) > OSDP_PIV_OP_TIMEOUT_MS) {
-		LOG_ERR("PIV: operation timed out; aborting");
+	if (osdp_mp_cancel_requested(&p->mp) ||
+	    osdp_millis_since(p->tstamp) > OSDP_PIV_OP_TIMEOUT_MS) {
+		LOG_ERR("PIV: operation %s; aborting",
+			osdp_mp_cancel_requested(&p->mp) ? "cancelled" :
+							   "timed out");
 		osdp_piv_abort(pd);
 		return CMD_ABORT;
 	}
@@ -361,8 +376,6 @@ int osdp_piv_cp_reply_consume(struct osdp_pd *pd, const uint8_t *buf, int len,
 		event->type = p->event_type;
 		event->piv_reply.length = (uint16_t)p->mp.total;
 		memcpy(event->piv_reply.data, p->data, p->mp.total);
-		osdp_mp_finish(&p->mp, OSDP_MP_OUTCOME_OK);
-		piv_op_reset(p);
 		return 1;
 	case OSDP_MP_RC_EARLY_TERM:
 		/* §5.10.2: the sender terminated the transfer early. */
@@ -375,6 +388,14 @@ int osdp_piv_cp_reply_consume(struct osdp_pd *pd, const uint8_t *buf, int len,
 		osdp_piv_abort(pd);
 		return 0;
 	}
+}
+
+void osdp_piv_cp_reply_finish(struct osdp_pd *pd)
+{
+	struct osdp_piv *p = TO_PIV(pd);
+
+	osdp_mp_finish(&p->mp, OSDP_MP_OUTCOME_OK);
+	piv_op_reset(p);
 }
 
 /* --- PD role --- */

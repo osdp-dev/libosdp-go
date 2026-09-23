@@ -42,39 +42,51 @@ func TestGetPDIDReturnsIdentityReportedByPD(t *testing.T) {
 }
 
 func TestSetFlagEnablesNotificationsAtRuntime(t *testing.T) {
-	cp, _, _ := startOnlinePair(t, 0)
-	notified := make(chan osdp.NotificationCommand, 4)
+	cp, pd, _ := startOnlinePair(t, 0)
+	pd.RegisterFileOperations(newMemFile(1, nil))
+	cp.RegisterFileOperations(0, newMemFile(1, make([]byte, 64)))
+	started := make(chan osdp.NotificationMP, 4)
 	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
-		if n, ok := ev.Event.(osdp.EventNotification); ok {
-			if c, ok := n.Payload.(osdp.NotificationCommand); ok {
-				notified <- c
-			}
+		if n, ok := ev.Event.(osdp.EventNotification); ok && n.Type == osdp.NotificationTypeMPStart {
+			started <- n.Payload.(osdp.NotificationMP)
 		}
 		return 0
 	})
-	buzz := &osdp.Command{Command: osdp.CommandBuzzer{ControlCode: osdp.BuzzerCCOff}}
+	done := make(chan struct{}, 4)
+	cp.SetCommandCompletionHandler(func(int, *osdp.Command, osdp.CompletionStatus) { done <- struct{}{} })
+	transfer := func() {
+		t.Helper()
+		if err := cp.SubmitCommand(0, &osdp.Command{Command: osdp.CommandFileTx{ID: 1}}); err != nil {
+			t.Fatalf("SubmitCommand(FileTx): %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("file transfer did not complete")
+		}
+	}
 
 	if err := cp.SetFlag(0, osdp.FlagEnableNotification); err != nil {
 		t.Fatalf("SetFlag: %v", err)
 	}
-	cp.SubmitCommand(0, buzz)
+	transfer()
 	select {
-	case c := <-notified:
-		if c.Command != osdp.CmdBuzzer {
-			t.Errorf("notification for %v, want CmdBuzzer", c.Command)
+	case n := <-started:
+		if n.MPType != osdp.MPMsgFileTransfer {
+			t.Errorf("MP start for %v, want file transfer", n.MPType)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no command notification after enabling the flag")
+	default:
+		t.Fatal("no MP start notification after enabling the flag")
 	}
 
 	if err := cp.ClearFlag(0, osdp.FlagEnableNotification); err != nil {
 		t.Fatalf("ClearFlag: %v", err)
 	}
-	cp.SubmitCommand(0, buzz)
+	transfer()
 	select {
-	case c := <-notified:
-		t.Fatalf("got %+v after clearing the flag", c)
-	case <-time.After(time.Second):
+	case n := <-started:
+		t.Fatalf("got %+v after clearing the flag", n)
+	default:
 	}
 }
 

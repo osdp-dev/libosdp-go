@@ -164,10 +164,6 @@ static inline struct osdp_notification *cmd_notif(struct osdp_cmd *cmd) { return
 
 static inline int get_notification_type(struct osdp_notification *n) { return n->type; }
 
-static inline void get_notification_command(struct osdp_notification *n, int *command, int *success) {
-    *command = n->command.command;
-    *success = n->command.success ? 1 : 0;
-}
 static inline void get_notification_sc_status(struct osdp_notification *n, int *active, int *scbk_d) {
     *active = n->sc_status.active ? 1 : 0;
     *scbk_d = n->sc_status.scbk_d ? 1 : 0;
@@ -192,11 +188,6 @@ static inline void get_notification_pd_id(struct osdp_notification *n, int *vers
 
 // Notification setters: notifications are decode-only in production (libosdp
 // synthesizes them), so these exist to construct osdp_event fixtures in tests.
-static inline void set_notification_command(struct osdp_event *ev, int command, int success) {
-    ev->notif.type = OSDP_NOTIFICATION_COMMAND;
-    ev->notif.command.command = command;
-    ev->notif.command.success = success;
-}
 static inline void set_notification_sc_status(struct osdp_event *ev, int active, int scbk_d) {
     ev->notif.type = OSDP_NOTIFICATION_SC_STATUS;
     ev->notif.sc_status.active = active;

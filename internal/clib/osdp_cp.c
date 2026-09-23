@@ -12,6 +12,7 @@
 #include "osdp_bio.h"
 #include "osdp_diag.h"
 #include "osdp_metrics.h"
+#include "osdp_trs.h"
 
 enum osdp_cp_error_e {
 	OSDP_CP_ERR_NONE = 0,
@@ -26,6 +27,8 @@ enum osdp_cp_error_e {
 };
 
 static void notify_pd_id(struct osdp_pd *pd);
+static int cp_drain_queue(struct osdp_pd *pd,
+			  enum osdp_completion_status status);
 
 static void cp_dispatch_event(struct osdp_pd *pd,
 			      const struct osdp_event *event)
@@ -67,6 +70,14 @@ static int cp_cmd_dequeue(struct osdp_pd *pd, const struct osdp_cmd **cmd)
 	return 0;
 }
 
+#ifdef OPT_BUILD_OSDP_TRS
+/* TRS session markers are consumed by the library; they never go on the wire */
+static bool cp_cmd_is_trs(const struct osdp_cmd *cmd, enum osdp_trs_cmd_e which)
+{
+	return cmd->id == OSDP_CMD_XWR && cmd->trs.command == which;
+}
+#endif
+
 static inline void cp_complete_cmd(struct osdp_pd *pd,
 				   const struct osdp_cmd *cmd,
 				   enum osdp_completion_status status)
@@ -75,8 +86,48 @@ static inline void cp_complete_cmd(struct osdp_pd *pd,
 
 	if (!cmd || !ctx->command_completion_callback)
 		return;
+	/* Ownership of the command returns to the application here, so it is
+	 * handed back mutable; the const above is the promise we made while
+	 * we held it. */
 	ctx->command_completion_callback(ctx->command_completion_callback_arg,
-					 pd->idx, cmd, status);
+					 pd->idx, (struct osdp_cmd *)cmd,
+					 status);
+}
+
+void cp_complete_engine_cmd(struct osdp_pd *pd, const struct osdp_cmd *cmd,
+			    enum osdp_completion_status status)
+{
+	cp_complete_cmd(pd, cmd, status);
+	cp_cmd_free(pd, cmd);
+}
+
+/* Which multipart family an engine-owned command's operation belongs to; the
+ * tag the completion hook matches p->msg_type against. */
+static enum osdp_mp_msg_type cp_cmd_mp_type(int cmd_id)
+{
+	switch (cmd_id) {
+	case OSDP_CMD_PIVDATA:
+		return OSDP_MP_MSG_PIV;
+	case OSDP_CMD_GENAUTH:
+		return OSDP_MP_MSG_GENAUTH;
+	case OSDP_CMD_CRAUTH:
+		return OSDP_MP_MSG_CRAUTH;
+	default:
+		/* A command routed to an engine but missing from this map would
+		 * be tagged with another family's type, and a mis-tagged slot
+		 * never completes. Fail loudly instead. */
+		BUG();
+	}
+
+	return OSDP_MP_MSG_PIV;
+}
+
+static inline void cp_own_engine_cmd(struct osdp_pd *pd,
+				     const struct osdp_cmd *cmd,
+				     enum osdp_mp_msg_type mp_type)
+{
+	pd->engine_cmd = cmd;
+	pd->engine_cmd_mp_type = mp_type;
 }
 
 static const char *cp_get_cap_name(int cap)
@@ -253,7 +304,8 @@ static int cp_build_command(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		break;
 	case CMD_MFG:
 		if (cmd->mfg.length > OSDP_CMD_MFG_MAX_DATALEN) {
-			LOG_ERR("Invalid MFG data length (%d)", cmd->mfg.length);
+			LOG_ERR("Invalid MFG data length (%d)",
+				cmd->mfg.length);
 			return OSDP_CP_ERR_GENERIC;
 		}
 		if (max_len < CMD_MFG_DATA_LEN + cmd->mfg.length) {
@@ -321,6 +373,13 @@ static int cp_build_command(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		}
 		len += ret;
 		break;
+	case CMD_XWR:
+		ret = osdp_trs_cmd_build(pd, cmd, buf + len, max_len - len);
+		if (ret <= 0) {
+			return OSDP_CP_ERR_GENERIC;
+		}
+		len += ret;
+		break;
 	case CMD_KEYSET:
 		if (!sc_is_active(pd)) {
 			LOG_ERR("Cannot perform KEYSET without SC!");
@@ -333,12 +392,13 @@ static int cp_build_command(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		if (max_len < CMD_KEYSET_DATA_LEN) {
 			goto out_of_space;
 		}
-		buf[len++] = 1;  /* key type (1: SCBK) */
+		buf[len++] = 1; /* key type (1: SCBK) */
 		buf[len++] = 16; /* key length in bytes */
 		if (cmd->keyset.type == 1) { /* SCBK */
 			memcpy(buf + len, cmd->keyset.data, 16);
-		} else if (cmd->keyset.type == 0) {  /* master_key */
-			osdp_compute_scbk(pd, (uint8_t *)cmd->keyset.data, buf + len);
+		} else if (cmd->keyset.type == 0) { /* master_key */
+			osdp_compute_scbk(pd, (uint8_t *)cmd->keyset.data,
+					  buf + len);
 		} else {
 			LOG_ERR("Unknown key type (%d)", cmd->keyset.type);
 			return OSDP_CP_ERR_GENERIC;
@@ -353,8 +413,8 @@ static int cp_build_command(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		if (max_len < CMD_CHLNG_DATA_LEN) {
 			goto out_of_space;
 		}
-		smb[0] = 3;       /* length */
-		smb[1] = SCS_11;  /* type */
+		smb[0] = 3; /* length */
+		smb[1] = SCS_11; /* type */
 		smb[2] = sc_use_scbkd(pd) ? 0 : 1;
 		memcpy(buf + len, pd->sc.cp_random, 8);
 		len += 8;
@@ -368,8 +428,8 @@ static int cp_build_command(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 			goto out_of_space;
 		}
 		osdp_compute_cp_cryptogram(pd);
-		smb[0] = 3;       /* length */
-		smb[1] = SCS_13;  /* type */
+		smb[0] = 3; /* length */
+		smb[1] = SCS_13; /* type */
 		smb[2] = sc_use_scbkd(pd) ? 0 : 1;
 		memcpy(buf + len, pd->sc.cp_cryptogram, 16);
 		len += 16;
@@ -454,7 +514,12 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		}
 		osdp_metrics_report(pd, OSDP_METRIC_NAK);
 		pd->nak_code = buf[pos];
+		/* Never blind-retransmit a card command: replaying card
+		 * traffic can have card-side effects (PIN retry counters,
+		 * transaction state), and readers are known to NAK an
+		 * unimplemented XWR sub-command with MSG_CHK. */
 		if (pd->nak_code == OSDP_PD_NAK_MSG_CHK &&
+		    pd->cmd_id != CMD_XWR &&
 		    ISSET_FLAG(pd, PD_FLAG_CP_USE_CRC)) {
 			if (!cp_pd_declared_crc(pd)) {
 				LOG_INF("PD NAK'd CRC-16, falling back to checksum");
@@ -489,7 +554,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			break;
 		}
 		prev = pd->id;
-		pd->id.vendor_code  = bread_u24_le(buf, &pos);
+		pd->id.vendor_code = bread_u24_le(buf, &pos);
 		pd->id.model = buf[pos++];
 		pd->id.version = buf[pos++];
 		pd->id.serial_number = bread_u32_le(buf, &pos);
@@ -500,7 +565,11 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		 * from an already-known identity means a different device is
 		 * answering this address -- worth a warning. */
 		if (pd_id_changed(&prev, &pd->id)) {
-			if (pd_id_known(&prev)) {
+			if (pd_id_known(&prev) && sc_was_established(pd)) {
+				LOG_EM("PD ID changed on a slot that ran a"
+				       " secure channel; has this PD been"
+				       " swapped?");
+			} else if (pd_id_known(&prev)) {
 				LOG_WRN("PD ID changed since last contact");
 			}
 			notify_pd_id(pd);
@@ -551,6 +620,16 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 				CLEAR_FLAG(pd, PD_FLAG_CP_USE_CRC);
 			}
 		}
+
+		/* Check for Transparent Reader Support */
+		t = OSDP_PD_CAP_SMART_CARD_SUPPORT;
+		if (pd->cap[t].compliance_level & 0x01) {
+			SET_FLAG(pd, PD_FLAG_TRS_CAPABLE);
+		} else {
+			CLEAR_FLAG(pd, PD_FLAG_TRS_CAPABLE);
+		}
+		osdp_trs_scan_note_capability(pd);
+
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	case REPLY_OSTATR:
@@ -632,6 +711,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		}
 		memcpy(event.keypress.data, buf + pos, event.keypress.length);
 		cp_dispatch_event(pd, &event);
+		osdp_trs_scan_note_activity(pd);
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	case REPLY_RAW:
@@ -650,6 +730,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		}
 		memcpy(event.cardread.data, buf + pos, t);
 		cp_dispatch_event(pd, &event);
+		osdp_trs_scan_note_activity(pd);
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	case REPLY_FMT:
@@ -679,6 +760,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		}
 		if (t > 0) {
 			cp_dispatch_event(pd, &event);
+			osdp_piv_cp_reply_finish(pd);
 		}
 		ret = OSDP_CP_ERR_NONE;
 		break;
@@ -761,6 +843,37 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 	case REPLY_FTSTAT:
 		ret = osdp_file_cmd_stat_decode(pd, buf + pos, len);
 		break;
+	case REPLY_XRD:
+		if (!trs_active(pd)) {
+			/* A reader may announce a card in its field as an XRD
+			 * poll response with no session open (v2.2 sections
+			 * 5.11, 7.26.2, 7.26.8); that sighting is for the app.
+			 * Every other out-of-session XRD (a reader left in
+			 * transparent mode after a failed teardown or a CP
+			 * restart) is shrugged off rather than cycling the PD
+			 * offline. */
+			ret = osdp_trs_reply_decode(pd, buf + pos, len, &event);
+			if (ret == OSDP_TRS_REPLY_ACTION_DISPATCH &&
+			    (event.trs.reply == OSDP_TRS_REPLY_CARD_INFO ||
+			     event.trs.reply == OSDP_TRS_REPLY_CARD_PRESENT)) {
+				cp_dispatch_event(pd, &event);
+			} else {
+				LOG_WRN("Ignoring REPLY_XRD outside a TRS session");
+			}
+			ret = OSDP_CP_ERR_NONE;
+			break;
+		}
+		ret = osdp_trs_reply_decode(pd, buf + pos, len, &event);
+		if (ret < 0) {
+			break;
+		}
+		trs_set_reply_error(pd,
+			ret == OSDP_TRS_REPLY_ACTION_DISPATCH_ERROR);
+		if (ret != OSDP_TRS_REPLY_ACTION_NONE) {
+			cp_dispatch_event(pd, &event);
+		}
+		ret = OSDP_CP_ERR_NONE;
+		break;
 	case REPLY_CCRYPT:
 		if (sc_is_active(pd) || pd->cmd_id != CMD_CHLNG) {
 			LOG_EM("Out of order REPLY_CCRYPT; has PD gone rogue?");
@@ -793,8 +906,8 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	default:
-		LOG_WRN("Unknown reply %s(%02x)",
-			osdp_reply_name(pd->reply_id), pd->reply_id);
+		LOG_WRN("Unknown reply %s(%02x)", osdp_reply_name(pd->reply_id),
+			pd->reply_id);
 		return OSDP_CP_ERR_UNKNOWN;
 	}
 
@@ -821,38 +934,43 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
  * sequence number. */
 static int cp_build_packet(struct osdp_pd *pd)
 {
-	int ret, packet_buf_size = get_tx_buf_size(pd);
+	int ret, rc = OSDP_CP_ERR_GENERIC;
+	int packet_buf_size = get_tx_buf_size(pd);
 	struct osdp_cmd local_keyset_cmd;
 	const struct osdp_cmd *cmd = pd->active_cmd;
 	uint8_t *buf = osdp_tx_staging_buf(pd);
 
 	pd->packet_buf = buf;
+	memset(&local_keyset_cmd, 0, sizeof(local_keyset_cmd));
 
 	ret = osdp_phy_packet_init(pd, buf, packet_buf_size);
 	if (ret < 0) {
-		return OSDP_CP_ERR_GENERIC;
+		goto out;
 	}
 	pd->packet_buf_len = ret;
 
 	if (pd->state == OSDP_CP_STATE_SET_SCBK && pd->cmd_id == CMD_KEYSET) {
-		memset(&local_keyset_cmd, 0, sizeof(local_keyset_cmd));
 		fill_local_keyset_cmd(pd, &local_keyset_cmd);
 		cmd = &local_keyset_cmd;
 	}
 
 	ret = cp_build_command(pd, cmd, buf, packet_buf_size);
 	if (ret < 0) {
-		return OSDP_CP_ERR_GENERIC;
+		goto out;
 	}
 	pd->packet_buf_len += ret;
 
 	ret = osdp_phy_finalize_packet(pd, buf, pd->packet_buf_len,
 				       packet_buf_size);
 	if (ret < 0) {
-		return OSDP_CP_ERR_GENERIC;
+		goto out;
 	}
 	pd->packet_buf_len = ret;
-	return OSDP_CP_ERR_NONE;
+	rc = OSDP_CP_ERR_NONE;
+out:
+	/* Holds a copy of the SCBK on the SET_SCBK path. */
+	osdp_fill_zeros(&local_keyset_cmd, sizeof(local_keyset_cmd));
+	return rc;
 }
 
 static int cp_process_reply(struct osdp_pd *pd)
@@ -881,6 +999,15 @@ static int cp_process_reply(struct osdp_pd *pd)
 			make_request(pd, CP_REQ_LINK_RESET);
 			return OSDP_CP_ERR_SEQ_NUM;
 		}
+		if (pd->nak_code == OSDP_PD_NAK_SC_COND) {
+			/* The session is unusable: the reply was unMAC'd, or
+			 * its MAC did not check out. Nothing in it can be
+			 * trusted, but its arrival is reason enough to redo
+			 * the handshake rather than sit out the offline
+			 * dwell. */
+			LOG_WRN("Secure channel is out of step; restarting it");
+			make_request(pd, CP_REQ_RESTART_SC);
+		}
 		/* Other NACKs: CP cannot do anything about an invalid reply from a PD.
 		 * Default to going offline and retrying after a while. The reason for
 		 * this failure was probably better logged by lower layers.
@@ -908,22 +1035,38 @@ static inline bool cp_sc_should_retry(struct osdp_pd *pd)
 static int cp_translate_cmd(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 {
 	switch (cmd->id) {
-	case OSDP_CMD_OUTPUT: return CMD_OUT;
-	case OSDP_CMD_LED:    return CMD_LED;
-	case OSDP_CMD_BUZZER: return CMD_BUZ;
-	case OSDP_CMD_TEXT:   return CMD_TEXT;
-	case OSDP_CMD_TDSET:  return CMD_TDSET;
-	case OSDP_CMD_COMSET: return CMD_COMSET;
-	case OSDP_CMD_MFG:    return CMD_MFG;
-	case OSDP_CMD_BIOREAD:  return CMD_BIOREAD;
-	case OSDP_CMD_BIOMATCH: return CMD_BIOMATCH;
+	case OSDP_CMD_OUTPUT:
+		return CMD_OUT;
+	case OSDP_CMD_LED:
+		return CMD_LED;
+	case OSDP_CMD_BUZZER:
+		return CMD_BUZ;
+	case OSDP_CMD_TEXT:
+		return CMD_TEXT;
+	case OSDP_CMD_TDSET:
+		return CMD_TDSET;
+	case OSDP_CMD_COMSET:
+		return CMD_COMSET;
+	case OSDP_CMD_MFG:
+		return CMD_MFG;
+	case OSDP_CMD_BIOREAD:
+		return CMD_BIOREAD;
+	case OSDP_CMD_BIOMATCH:
+		return CMD_BIOMATCH;
+	case OSDP_CMD_XWR:
+		return CMD_XWR;
 	case OSDP_CMD_STATUS:
 		switch (cmd->status.type) {
-		case OSDP_STATUS_REPORT_INPUT:  return CMD_ISTAT;
-		case OSDP_STATUS_REPORT_OUTPUT: return CMD_OSTAT;
-		case OSDP_STATUS_REPORT_LOCAL:  return CMD_LSTAT;
-		case OSDP_STATUS_REPORT_READER: return CMD_RSTAT;
-		default: return -1;
+		case OSDP_STATUS_REPORT_INPUT:
+			return CMD_ISTAT;
+		case OSDP_STATUS_REPORT_OUTPUT:
+			return CMD_OSTAT;
+		case OSDP_STATUS_REPORT_LOCAL:
+			return CMD_LSTAT;
+		case OSDP_STATUS_REPORT_READER:
+			return CMD_RSTAT;
+		default:
+			return -1;
 		}
 	case OSDP_CMD_KEYSET:
 		if (cmd->keyset.type != 1 || !sc_is_active(pd)) {
@@ -938,7 +1081,8 @@ static int cp_translate_cmd(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 		 * should never reach here unless something is wrong.
 		 */
 		__fallthrough;
-	default: BUG();
+	default:
+		BUG();
 	}
 
 	return -1;
@@ -952,9 +1096,18 @@ static void fill_local_keyset_cmd(struct osdp_pd *pd, struct osdp_cmd *cmd)
 	memcpy(cmd->keyset.data, pd->sc.scbk, sizeof(pd->sc.scbk));
 }
 
+/*
+ * States in which this PD owns the shared bus: a command is being built,
+ * its finalized bytes are still waiting for the transport to accept them,
+ * or a reply is outstanding. SEND_CMD_WAIT belongs here -- the packet is
+ * already finalized (sequence number and SC MAC advanced) and parked in
+ * pd->packet_buf, so no other PD may take the bus, and state_update() must
+ * keep re-entering the phy FSM to retry the send.
+ */
 static inline bool cp_phy_bus_is_busy(struct osdp_pd *pd)
 {
 	return (pd->phy_state == OSDP_CP_PHY_STATE_SEND_CMD ||
+		pd->phy_state == OSDP_CP_PHY_STATE_SEND_CMD_WAIT ||
 		pd->phy_state == OSDP_CP_PHY_STATE_REPLY_WAIT);
 }
 
@@ -1068,15 +1221,13 @@ static int cp_phy_state_update(struct osdp_pd *pd)
 			pd->tstamp = osdp_millis_now();
 			osdp_phy_progress_sequence(pd);
 		}
-		if (rc == OSDP_CP_ERR_NONE ||
-		    rc == OSDP_CP_ERR_SEQ_NUM ||
+		if (rc == OSDP_CP_ERR_NONE || rc == OSDP_CP_ERR_SEQ_NUM ||
 		    (rc == OSDP_CP_ERR_UNKNOWN && pd->cmd_id == CMD_POLL &&
 		     is_ignore_unsolicited_messages(pd))) {
 			cp_phy_state_done(pd);
 			return OSDP_CP_ERR_NONE;
 		}
-		if (rc == OSDP_CP_ERR_GENERIC ||
-		    rc == OSDP_CP_ERR_UNKNOWN ||
+		if (rc == OSDP_CP_ERR_GENERIC || rc == OSDP_CP_ERR_UNKNOWN ||
 		    rc == OSDP_CP_ERR_APP) {
 			goto error;
 		}
@@ -1096,8 +1247,7 @@ static int cp_phy_state_update(struct osdp_pd *pd)
 			if (pd->phy_retry_count < OSDP_CMD_MAX_RETRIES) {
 				pd->phy_retry_count += 1;
 				LOG_DBG("No response in %dms post-transmit; probing (%d)",
-					OSDP_RESP_TOUT_MS,
-					pd->phy_retry_count);
+					OSDP_RESP_TOUT_MS, pd->phy_retry_count);
 				cp_phy_state_wait(pd, OSDP_CMD_RETRY_WAIT_MS);
 				return OSDP_CP_ERR_DEFER;
 			}
@@ -1118,14 +1268,26 @@ error:
 static const char *state_get_name(enum osdp_cp_state_e state)
 {
 	switch (state) {
-	case OSDP_CP_STATE_INIT:      return "ID-Request";
-	case OSDP_CP_STATE_CAPDET:    return "Cap-Detect";
-	case OSDP_CP_STATE_SC_CHLNG:  return "SC-Chlng";
-	case OSDP_CP_STATE_SC_SCRYPT: return "SC-Scrypt";
-	case OSDP_CP_STATE_SET_SCBK:  return "SC-SetSCBK";
-	case OSDP_CP_STATE_ONLINE:    return "Online";
-	case OSDP_CP_STATE_OFFLINE:   return "Offline";
-	case OSDP_CP_STATE_DISABLED:  return "Disabled";
+	case OSDP_CP_STATE_INIT:
+		return "ID-Request";
+	case OSDP_CP_STATE_CAPDET:
+		return "Cap-Detect";
+	case OSDP_CP_STATE_SC_CHLNG:
+		return "SC-Chlng";
+	case OSDP_CP_STATE_SC_SCRYPT:
+		return "SC-Scrypt";
+	case OSDP_CP_STATE_SET_SCBK:
+		return "SC-SetSCBK";
+	case OSDP_CP_STATE_ONLINE:
+		return "Online";
+	case OSDP_CP_STATE_OFFLINE:
+		return "Offline";
+	case OSDP_CP_STATE_DISABLED:
+		return "Disabled";
+	case OSDP_CP_STATE_TRS_SETUP:
+		return "TRS-Setup";
+	case OSDP_CP_STATE_TRS_RUN:
+		return "TRS-Run";
 	default:
 		BUG();
 	}
@@ -1152,6 +1314,63 @@ static int cp_setup_active_cmd(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 	cp_cmd_free(pd, cmd);
 	return ret;
 }
+
+#ifdef OPT_BUILD_OSDP_TRS
+/* Consume a command the library handles itself; nothing goes on the wire */
+static void cp_discard_cmd(struct osdp_pd *pd, const struct osdp_cmd *cmd,
+			   enum osdp_completion_status status)
+{
+	cp_complete_cmd(pd, cmd, status);
+	cp_cmd_free(pd, cmd);
+	pd->active_cmd = NULL;
+}
+
+/*
+ * A session that died before reaching its STOP leaves the rest of its band
+ * queued behind it with no session left to run in. Drop it, up to and including
+ * the STOP that would have closed it, so that whatever the app queued after the
+ * band runs as it would have.
+ */
+static void cp_flush_trs_band(struct osdp_pd *pd)
+{
+	queue_t drain = pd->cmd_queue;
+	queue_t kept;
+	const struct osdp_cmd *cmd;
+	queue_node_t *node;
+	bool stop_seen = false;
+
+	/*
+	 * Detach before completing: a completion may submit, and its command
+	 * belongs after the band, not inside it. What survives the band is
+	 * re-queued ahead of anything submitted meanwhile, so the app's
+	 * ordering is preserved.
+	 */
+	queue_init(&pd->cmd_queue);
+	queue_init(&kept);
+
+	while (!stop_seen && queue_dequeue(&drain, &node) == 0) {
+		cmd = CONTAINER_OF(node, struct osdp_cmd, _node);
+		stop_seen = cp_cmd_is_trs(cmd, OSDP_TRS_CMD_STOP);
+		cp_complete_cmd(pd, cmd, OSDP_COMPLETION_FLUSHED);
+		cp_cmd_free(pd, cmd);
+	}
+	/* Whatever the band did not swallow keeps its place at the front. */
+	while (queue_dequeue(&drain, &node) == 0) {
+		queue_enqueue(&kept, node);
+	}
+	/* Then anything a completion submitted while we were draining. */
+	while (queue_dequeue(&pd->cmd_queue, &node) == 0) {
+		queue_enqueue(&kept, node);
+	}
+	pd->cmd_queue = kept;
+
+	if (!stop_seen) {
+		/* Ran to the end of the queue: the STOP was never submitted, so
+		 * the tail is inside the band we just dropped. */
+		pd->trs.band_open = false;
+	}
+}
+#endif
 
 /* Poll only as often as OSDP_PD_POLL_TIMEOUT_MS allows; -1 means "not yet" */
 static int cp_get_poll_command(struct osdp_pd *pd)
@@ -1185,6 +1404,15 @@ static int cp_get_online_command(struct osdp_pd *pd)
 	int ret;
 
 	if (cp_cmd_dequeue(pd, &cmd) == 0) {
+#ifdef OPT_BUILD_OSDP_TRS
+		if (cp_cmd_is_trs(cmd, OSDP_TRS_CMD_START)) {
+			/* Open a TRS session; the transition runs through the
+			 * usual request path, nothing goes on the wire now. */
+			cp_discard_cmd(pd, cmd, OSDP_COMPLETION_OK);
+			make_request(pd, CP_REQ_TRS_OPEN);
+			return -1;
+		}
+#endif
 		return cp_setup_active_cmd(pd, cmd);
 	}
 
@@ -1203,8 +1431,84 @@ static int cp_get_online_command(struct osdp_pd *pd)
 		return ret;
 	}
 
+#ifdef OPT_BUILD_OSDP_TRS
+	/* Sitting after the staged engines above pauses the presence scan for
+	 * as long as any of them has work; a queued band parks it via
+	 * trs.band_open, which is set at submit time. */
+	if (osdp_trs_scan_probe_due(pd)) {
+		make_request(pd, CP_REQ_TRS_SCAN);
+		return -1;
+	}
+#endif
+
 	return cp_get_poll_command(pd);
 }
+
+#ifdef OPT_BUILD_OSDP_TRS
+static void notify_trs_status(struct osdp_pd *pd,
+			      enum osdp_trs_session_status_e status);
+
+/*
+ * Command selector for a TRS session (the band of commands between a START and
+ * its STOP). Mode negotiation and teardown are library-generated straight from
+ * pd->trs.state (active_cmd == NULL, which is how osdp_trs_cmd_build() knows to
+ * serialize a session step instead of a card command); in XMIT the band's card
+ * commands are drained in order, and CMD_POLL keeps the link warm between them.
+ *
+ * During an app band the queue can only hand us a card command or the STOP that
+ * ends it; cp_band_admit() turned away anything else when it was submitted.
+ * During a scan probe there is no band, so ordinary app commands may surface
+ * too: they run inline (mode 01 only suppresses the reader's own card
+ * processing) -- except a START, which is the app answering a sighting, and
+ * turns the probe's transparent session into a band with no extra mode
+ * negotiation on the wire.
+ */
+static int cp_get_trs_command(struct osdp_pd *pd)
+{
+	const struct osdp_cmd *cmd;
+
+	switch (pd->trs.state) {
+	case TRS_STATE_XMIT:
+		if (cp_cmd_dequeue(pd, &cmd)) {
+			if (pd->trs.probe && osdp_trs_probe_expired(pd)) {
+				/* Probe is done: no card transaction to
+				 * disconnect, just restore the default mode */
+				pd->trs.state = TRS_STATE_TEARDOWN;
+				return CMD_XWR;
+			}
+			if (osdp_trs_scan_ask_due(pd)) {
+				/* The scan's own question: nobody queued it,
+				 * so there is no app command behind it. */
+				pd->active_cmd = NULL;
+				osdp_trs_scan_note_ask(pd);
+				return CMD_XWR;
+			}
+			return cp_get_poll_command(pd);
+		}
+		if (pd->trs.probe && cp_cmd_is_trs(cmd, OSDP_TRS_CMD_START)) {
+			cp_discard_cmd(pd, cmd, OSDP_COMPLETION_OK);
+			osdp_trs_probe_adopted(pd);
+			LOG_INF("TRS session opened (adopted scan probe)");
+			notify_trs_status(pd, OSDP_TRS_SESSION_OPENED);
+			return cp_get_trs_command(pd);
+		}
+		if (cp_cmd_is_trs(cmd, OSDP_TRS_CMD_STOP)) {
+			cp_discard_cmd(pd, cmd, OSDP_COMPLETION_OK);
+			pd->trs.stop_pending = false;
+			pd->trs.state = TRS_STATE_DISCONNECT_CARD;
+			return CMD_XWR;
+		}
+		return cp_setup_active_cmd(pd, cmd);
+	case TRS_STATE_SET_MODE:
+	case TRS_STATE_DISCONNECT_CARD:
+	case TRS_STATE_TEARDOWN:
+		pd->active_cmd = NULL;
+		return CMD_XWR;
+	default:
+		return cp_get_poll_command(pd);
+	}
+}
+#endif
 
 static void notify_pd_status(struct osdp_pd *pd, bool is_online)
 {
@@ -1237,6 +1541,25 @@ static void notify_pd_id(struct osdp_pd *pd)
 	ctx->event_callback(ctx->event_callback_arg, pd->idx, &evt);
 	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
 }
+
+#ifdef OPT_BUILD_OSDP_TRS
+static void notify_trs_status(struct osdp_pd *pd,
+			      enum osdp_trs_session_status_e status)
+{
+	struct osdp *ctx = pd_to_osdp(pd);
+	struct osdp_event evt;
+
+	if (!ctx->event_callback || !is_notifications_enabled(pd)) {
+		return;
+	}
+
+	evt.type = OSDP_EVENT_NOTIFICATION;
+	evt.notif.type = OSDP_NOTIFICATION_TRS_STATUS;
+	evt.notif.trs_status.status = status;
+	ctx->event_callback(ctx->event_callback_arg, pd->idx, &evt);
+	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
+}
+#endif
 
 static void notify_sc_status(struct osdp_pd *pd)
 {
@@ -1312,7 +1635,11 @@ static bool cp_check_online_response(struct osdp_pd *pd)
 		    pd->reply_id == REPLY_GENAUTHR ||
 		    pd->reply_id == REPLY_CRAUTHR ||
 		    pd->reply_id == REPLY_RAW ||
-		    pd->reply_id == REPLY_KEYPAD) {
+		    pd->reply_id == REPLY_KEYPAD ||
+		    pd->reply_id == REPLY_XRD) {
+			/* An XRD with no session behind it was already
+			 * swallowed by the decoder; it is still a valid,
+			 * well-formed poll response. */
 			return true;
 		}
 		return is_ignore_unsolicited_messages(pd);
@@ -1320,8 +1647,10 @@ static bool cp_check_online_response(struct osdp_pd *pd)
 
 	/* Otherwise, we permit only expected responses */
 	switch (pd->cmd_id) {
-	case CMD_FILETRANSFER: return pd->reply_id == REPLY_FTSTAT;
-	case CMD_COMSET:       return pd->reply_id == REPLY_COM;
+	case CMD_FILETRANSFER:
+		return pd->reply_id == REPLY_FTSTAT;
+	case CMD_COMSET:
+		return pd->reply_id == REPLY_COM;
 	case CMD_MFG:
 		/* REPLY_MFGERRR is a valid reply, but it reports that the
 		 * vendor command failed; see the soft-failure handling in
@@ -1350,11 +1679,21 @@ static bool cp_check_online_response(struct osdp_pd *pd)
 		       (pd->cmd_id == CMD_GENAUTH ?
 				pd->reply_id == REPLY_GENAUTHR :
 				pd->reply_id == REPLY_CRAUTHR);
-	case CMD_LSTAT:        return pd->reply_id == REPLY_LSTATR;
-	case CMD_ISTAT:        return pd->reply_id == REPLY_ISTATR;
-	case CMD_OSTAT:        return pd->reply_id == REPLY_OSTATR;
-	case CMD_OUT:          return pd->reply_id == REPLY_OSTATR;
-	case CMD_RSTAT:        return pd->reply_id == REPLY_RSTATR;
+	case CMD_LSTAT:
+		return pd->reply_id == REPLY_LSTATR;
+	case CMD_ISTAT:
+		return pd->reply_id == REPLY_ISTATR;
+	case CMD_OSTAT:
+		return pd->reply_id == REPLY_OSTATR;
+	case CMD_OUT:
+		return pd->reply_id == REPLY_OSTATR;
+	case CMD_RSTAT:
+		return pd->reply_id == REPLY_RSTATR;
+	case CMD_XWR:
+		/* An XRD error report is a valid reply, but it says the card
+		 * transaction failed; see the soft-failure handling in
+		 * state_update(). */
+		return pd->reply_id == REPLY_XRD && !trs_reply_error(pd);
 	default:
 		LOG_ERR("Unexpected respose: CMD: %s(%02x) REPLY: %s(%02x)",
 			osdp_cmd_name(pd->cmd_id), pd->cmd_id,
@@ -1368,13 +1707,25 @@ static inline int state_get_cmd(struct osdp_pd *pd)
 	enum osdp_cp_state_e state = pd->state;
 
 	switch (state) {
-	case OSDP_CP_STATE_INIT:      return CMD_ID;
-	case OSDP_CP_STATE_CAPDET:    return CMD_CAP;
-	case OSDP_CP_STATE_SC_CHLNG:  return CMD_CHLNG;
-	case OSDP_CP_STATE_SC_SCRYPT: return CMD_SCRYPT;
-	case OSDP_CP_STATE_SET_SCBK:  return CMD_KEYSET;
-	case OSDP_CP_STATE_ONLINE:    return cp_get_online_command(pd);
-	default: return -1;
+	case OSDP_CP_STATE_INIT:
+		return CMD_ID;
+	case OSDP_CP_STATE_CAPDET:
+		return CMD_CAP;
+	case OSDP_CP_STATE_SC_CHLNG:
+		return CMD_CHLNG;
+	case OSDP_CP_STATE_SC_SCRYPT:
+		return CMD_SCRYPT;
+	case OSDP_CP_STATE_SET_SCBK:
+		return CMD_KEYSET;
+	case OSDP_CP_STATE_ONLINE:
+		return cp_get_online_command(pd);
+#ifdef OPT_BUILD_OSDP_TRS
+	case OSDP_CP_STATE_TRS_SETUP:
+	case OSDP_CP_STATE_TRS_RUN:
+		return cp_get_trs_command(pd);
+#endif
+	default:
+		return -1;
 	}
 }
 
@@ -1383,13 +1734,25 @@ static inline bool state_check_reply(struct osdp_pd *pd)
 	enum osdp_cp_state_e state = pd->state;
 
 	switch (state) {
-	case OSDP_CP_STATE_INIT:      return pd->reply_id == REPLY_PDID;
-	case OSDP_CP_STATE_CAPDET:    return pd->reply_id == REPLY_PDCAP;
-	case OSDP_CP_STATE_SC_CHLNG:  return pd->reply_id == REPLY_CCRYPT;
-	case OSDP_CP_STATE_SC_SCRYPT: return pd->reply_id == REPLY_RMAC_I;
-	case OSDP_CP_STATE_SET_SCBK:  return pd->reply_id == REPLY_ACK;
-	case OSDP_CP_STATE_ONLINE:    return cp_check_online_response(pd);
-	default: return false;
+	case OSDP_CP_STATE_INIT:
+		return pd->reply_id == REPLY_PDID;
+	case OSDP_CP_STATE_CAPDET:
+		return pd->reply_id == REPLY_PDCAP;
+	case OSDP_CP_STATE_SC_CHLNG:
+		return pd->reply_id == REPLY_CCRYPT;
+	case OSDP_CP_STATE_SC_SCRYPT:
+		return pd->reply_id == REPLY_RMAC_I;
+	case OSDP_CP_STATE_SET_SCBK:
+		return pd->reply_id == REPLY_ACK;
+	case OSDP_CP_STATE_ONLINE:
+		return cp_check_online_response(pd);
+#ifdef OPT_BUILD_OSDP_TRS
+	case OSDP_CP_STATE_TRS_SETUP:
+	case OSDP_CP_STATE_TRS_RUN:
+		return cp_check_online_response(pd);
+#endif
+	default:
+		return false;
 	}
 }
 
@@ -1434,7 +1797,8 @@ static enum osdp_cp_state_e get_next_ok_state(struct osdp_pd *pd)
 		return OSDP_CP_STATE_OFFLINE;
 	case OSDP_CP_STATE_DISABLED:
 		return OSDP_CP_STATE_DISABLED;
-	default: BUG();
+	default:
+		BUG();
 	}
 }
 
@@ -1449,7 +1813,7 @@ static enum osdp_cp_state_e get_next_err_state(struct osdp_pd *pd)
 		if (is_enforce_secure(pd)) {
 			return OSDP_CP_STATE_OFFLINE;
 		}
-		if (!sc_use_scbkd(pd)) {
+		if (!sc_use_scbkd(pd) && !sc_was_established(pd)) {
 			/* Self-transition: retry the handshake with SCBK-D */
 			return OSDP_CP_STATE_SC_CHLNG;
 		}
@@ -1470,7 +1834,8 @@ static enum osdp_cp_state_e get_next_err_state(struct osdp_pd *pd)
 		return OSDP_CP_STATE_OFFLINE;
 	case OSDP_CP_STATE_DISABLED:
 		return OSDP_CP_STATE_DISABLED;
-	default: BUG();
+	default:
+		BUG();
 	}
 }
 
@@ -1491,8 +1856,7 @@ static inline enum osdp_cp_state_e get_next_state(struct osdp_pd *pd, int err)
  * next handshake attempt uses). Promoting it to explicit states is possible
  * but not worth the churn; this function is the only writer.
  */
-static void cp_transition_effects(struct osdp_pd *pd,
-				  enum osdp_cp_state_e cur,
+static void cp_transition_effects(struct osdp_pd *pd, enum osdp_cp_state_e cur,
 				  enum osdp_cp_state_e next, int err)
 {
 	if (err == 0) {
@@ -1513,6 +1877,8 @@ static void cp_transition_effects(struct osdp_pd *pd,
 			notify_sc_status(pd);
 			if (next == OSDP_CP_STATE_SET_SCBK) {
 				LOG_WRN("SC active with SCBK-D. Set SCBK");
+			} else {
+				SET_FLAG(pd, PD_FLAG_SC_ESTABLISHED);
 			}
 			break;
 		case OSDP_CP_STATE_SET_SCBK:
@@ -1521,7 +1887,8 @@ static void cp_transition_effects(struct osdp_pd *pd,
 		case OSDP_CP_STATE_ONLINE:
 			if (next == OSDP_CP_STATE_SC_CHLNG) {
 				LOG_INF("Attempting to restart SC after %d "
-					"seconds", OSDP_PD_SC_RETRY_MS/1000);
+					"seconds",
+					OSDP_PD_SC_RETRY_MS / 1000);
 			}
 			break;
 		default:
@@ -1539,6 +1906,11 @@ static void cp_transition_effects(struct osdp_pd *pd,
 			SET_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
 			LOG_WRN("SC Failed. Retry with SCBK-D");
 		} else {
+			if (sc_was_established(pd) && !sc_use_scbkd(pd)) {
+				LOG_EM("SC failed on a PD that was secured"
+				       " before; refusing SCBK-D. Has this PD"
+				       " been swapped?");
+			}
 			CLEAR_FLAG(pd, PD_FLAG_SC_USE_SCBKD);
 			/**
 			 * SC setup failed; Update sc_tstamp so the next retry
@@ -1569,14 +1941,52 @@ static void cp_transition_effects(struct osdp_pd *pd,
 static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 {
 	enum osdp_cp_state_e cur = pd->state;
+	/*
+	 * Report the online/offline transition, not entry into a particular
+	 * state. A PD leaving ONLINE for a secure channel re-handshake stops
+	 * accepting commands exactly as one going OFFLINE does, so the
+	 * application has to hear about it; keying the notification off
+	 * cp_is_online() is what keeps the reports and osdp_get_status_mask()
+	 * telling the same story -- including across a TRS session, which the
+	 * PD serves without ever leaving online.
+	 */
+	bool was_online = cp_state_is_online(cur);
+	bool now_online = cp_state_is_online(next);
 
 	switch (next) {
 	case OSDP_CP_STATE_INIT:
 		osdp_phy_state_reset(pd, true);
+		osdp_trs_probe_reset(pd);
 		break;
 	case OSDP_CP_STATE_ONLINE:
+		CLEAR_FLAG(pd, PD_FLAG_TRS_ACTIVE);
+#ifdef OPT_BUILD_OSDP_TRS
+		/* End of a TRS session: the PD never left online, so what the
+		 * app is told here is the session outcome. */
+		if (cur == OSDP_CP_STATE_TRS_SETUP ||
+		    cur == OSDP_CP_STATE_TRS_RUN) {
+			if (pd->trs.probe) {
+				/* A probe has no band to flush and no session
+				 * to report; a refusal only advances the retry
+				 * backoff and tells the app the scan stalled. */
+				if (osdp_trs_probe_close(pd)) {
+					LOG_WRN("TRS: scan probe refused; backing off");
+					notify_trs_status(pd, OSDP_TRS_SCAN_SUSPENDED);
+				}
+				break;
+			}
+			LOG_INF("TRS session %s",
+				pd->trs.failed ? "failed" : "closed");
+			if (pd->trs.stop_pending) {
+				cp_flush_trs_band(pd);
+			}
+			notify_trs_status(pd, pd->trs.failed ?
+						      OSDP_TRS_SESSION_FAILED :
+						      OSDP_TRS_SESSION_CLOSED);
+			break;
+		}
+#endif
 		LOG_INF("Online; %s SC", sc_is_active(pd) ? "With" : "Without");
-		notify_pd_status(pd, true);
 		break;
 	case OSDP_CP_STATE_OFFLINE:
 		pd->tstamp = osdp_millis_now();
@@ -1591,7 +2001,6 @@ static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 			" seconds; Was in '%s' state",
 			pd->wait_ms / 1000, state_get_name(cur));
 		osdp_engines_abort(pd);
-		notify_pd_status(pd, false);
 		break;
 	case OSDP_CP_STATE_SC_CHLNG:
 		osdp_phy_state_reset(pd, true);
@@ -1602,26 +2011,76 @@ static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 		sc_deactivate(pd);
 		notify_sc_status(pd);
 		osdp_engines_abort(pd);
-		notify_pd_status(pd, false);
 		osdp_phy_state_reset(pd, true);
 		LOG_INF("PD disabled; going offline until re-enabled");
 		break;
-	default: break;
+#ifdef OPT_BUILD_OSDP_TRS
+	case OSDP_CP_STATE_TRS_SETUP:
+		pd->trs.state = TRS_STATE_SET_MODE;
+		pd->trs.mode = TRS_MODE_00; /* until the PD accepts mode 01 */
+		pd->trs.failed = false;
+		pd->trs.stop_pending = true;
+		SET_FLAG(pd, PD_FLAG_TRS_ACTIVE);
+		break;
+	case OSDP_CP_STATE_TRS_RUN:
+		if (cur == OSDP_CP_STATE_TRS_SETUP) {
+			if (pd->trs.probe) {
+				/* Dwell starts when mode 01 is confirmed, not
+				 * when the probe was scheduled */
+				LOG_DBG("TRS: scan probe in transparent mode");
+				osdp_trs_probe_note_run(pd);
+				break;
+			}
+			LOG_INF("TRS session opened");
+			notify_trs_status(pd, OSDP_TRS_SESSION_OPENED);
+		}
+		break;
+#endif
+	default:
+		break;
 	}
 
-	LOG_DBG("StateChange: [%s] -> [%s] (SC-%s%s)",
-		state_get_name(cur),
-		state_get_name(next),
-		sc_is_active(pd) ? "Active" : "Inactive",
-		(sc_is_active(pd) && sc_use_scbkd(pd)) ? " with SCBK-D" : ""
-	);
+	LOG_DBG("StateChange: [%s] -> [%s] (SC-%s%s)", state_get_name(cur),
+		state_get_name(next), sc_is_active(pd) ? "Active" : "Inactive",
+		(sc_is_active(pd) && sc_use_scbkd(pd)) ? " with SCBK-D" : "");
 
 	pd->state = next;
+
+	/* After pd->state, so that a handler which calls back into libosdp --
+	 * osdp_get_status_mask(), say -- sees what the notification reports. */
+	if (was_online != now_online) {
+		notify_pd_status(pd, now_online);
+	}
+}
+
+/*
+ * CMD_XWR carries two kinds of traffic: the mode-set, card-terminate and
+ * mode-restore exchanges the library sequences on its own, and the card
+ * commands the app queued into the session's band. Only the latter are drained
+ * in TRS_STATE_XMIT, and only they are the app's to fail: if the PD refuses to
+ * enter or leave transparent mode, the session cannot run at all.
+ */
+static bool cp_trs_cmd_is_app_owned(struct osdp_pd *pd)
+{
+#ifdef OPT_BUILD_OSDP_TRS
+	/*
+	 * The presence scan's card scan runs in TRS_STATE_XMIT too, but it is
+	 * the library's own question -- nobody queued it and nobody is waiting
+	 * on it, and a reader refusing it must reach the error path that latches
+	 * that fact rather than being written off as one failed app command.
+	 */
+	return pd->trs.state == TRS_STATE_XMIT && !pd->trs.scan.asking;
+#else
+	ARG_UNUSED(pd);
+	return false;
+#endif
 }
 
 static bool cp_cmd_is_app_owned(struct osdp_pd *pd)
 {
 	switch (pd->cmd_id) {
+	case CMD_XWR:
+		return cp_trs_cmd_is_app_owned(pd);
 	case CMD_OUT:
 	case CMD_LED:
 	case CMD_BUZ:
@@ -1668,15 +2127,17 @@ static bool cp_nak_code_is_app_level(uint8_t nak_code)
 /**
  * A command can fail without the link being at fault: the PD received the frame
  * and declined to act on it. Such failures are reported to the app and the PD
- * stays online. This can only happen for a command the app asked for, and only
+ * stays online -- and, inside a TRS session, the card session stays open, so a
+ * refused APDU costs the app that one transaction and no more.
+ *
+ * This can only happen for a command the app asked for, and only
  * when the PD answered us; a timeout or a malformed reply is always a hard
  * failure, as is an unexpected (if well formed) reply, which means the PD has
  * lost track of the exchange.
  */
 static bool cp_cmd_failure_is_soft(struct osdp_pd *pd)
 {
-	if (!cp_is_online(pd) ||
-	    pd->phy_state != OSDP_CP_PHY_STATE_DONE ||
+	if (!cp_is_online(pd) || pd->phy_state != OSDP_CP_PHY_STATE_DONE ||
 	    !cp_cmd_is_app_owned(pd)) {
 		return false;
 	}
@@ -1694,69 +2155,26 @@ static bool cp_cmd_failure_is_soft(struct osdp_pd *pd)
 		return true;
 	}
 
+	/* Likewise for a card command the reader answered with an error report:
+	 * that transaction failed, but the card session is still up. */
+	if (pd->cmd_id == CMD_XWR && pd->reply_id == REPLY_XRD &&
+	    trs_reply_error(pd)) {
+		return true;
+	}
+
+	/* A reader may NAK a card command it does not implement with any code
+	 * it fancies -- the RPK40 answers CARD_SCAN with MSG_CHK. The command
+	 * was delivered and answered; unless the code says the link itself is
+	 * broken, the failure belongs to this one transaction. */
+	if (pd->cmd_id == CMD_XWR && pd->reply_id == REPLY_NAK &&
+	    pd->nak_code != OSDP_PD_NAK_SEQ_NUM &&
+	    pd->nak_code != OSDP_PD_NAK_SC_UNSUP &&
+	    pd->nak_code != OSDP_PD_NAK_SC_COND) {
+		return true;
+	}
+
 	return pd->reply_id == REPLY_NAK &&
 	       cp_nak_code_is_app_level(pd->nak_code);
-}
-
-static void notify_command_status(struct osdp_pd *pd, int status)
-{
-	int app_cmd;
-	struct osdp_event evt;
-	struct osdp *ctx = pd_to_osdp(pd);
-
-	if (!ctx->event_callback || !is_notifications_enabled(pd)) {
-		return;
-	}
-
-	switch (pd->cmd_id) {
-	case CMD_OUT:    app_cmd = OSDP_CMD_OUTPUT; break;
-	case CMD_LED:    app_cmd = OSDP_CMD_LED;    break;
-	case CMD_BUZ:    app_cmd = OSDP_CMD_BUZZER; break;
-	case CMD_TEXT:   app_cmd = OSDP_CMD_TEXT;   break;
-	case CMD_TDSET:  app_cmd = OSDP_CMD_TDSET;  break;
-	case CMD_COMSET: app_cmd = OSDP_CMD_COMSET; break;
-	case CMD_ISTAT:  app_cmd = OSDP_CMD_STATUS; break;
-	case CMD_OSTAT:  app_cmd = OSDP_CMD_STATUS; break;
-	case CMD_LSTAT:  app_cmd = OSDP_CMD_STATUS; break;
-	case CMD_RSTAT:  app_cmd = OSDP_CMD_STATUS; break;
-	case CMD_KEYSET: app_cmd = OSDP_CMD_KEYSET; break;
-	case CMD_MFG:
-		if (pd->reply_id == REPLY_MFGREP ||
-		    pd->reply_id == REPLY_MFGSTATR) {
-			/**
-			* if we received a manufacturer-specific reply, there is
-			* a dedicated event (OSDP_EVENT_MFGREP/OSDP_EVENT_MFGSTATR)
-			* for it. So we can skip sending a notification event.
-			*
-			* REPLY_MFGERRR also has a dedicated event, but it reports
-			* a failed command, so the notification is still sent.
-			*/
-			return;
-		}
-		app_cmd = OSDP_CMD_MFG;
-		break;
-	case CMD_BIOREAD:
-	case CMD_BIOMATCH:
-		if (pd->reply_id == REPLY_BIOREADR ||
-		    pd->reply_id == REPLY_BIOMATCHR) {
-			/* The dedicated event carries the scan result; skip the
-			 * redundant notification. */
-			return;
-		}
-		app_cmd = (pd->cmd_id == CMD_BIOREAD) ? OSDP_CMD_BIOREAD
-						      : OSDP_CMD_BIOMATCH;
-		break;
-	default:
-		return;
-	}
-
-	evt.type = OSDP_EVENT_NOTIFICATION;
-	evt.notif.type = OSDP_NOTIFICATION_COMMAND;
-	evt.notif.command.command = app_cmd;
-	evt.notif.command.success = (status != 0);
-
-	ctx->event_callback(ctx->event_callback_arg, pd->idx, &evt);
-	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
 }
 
 static void state_update(struct osdp_pd *pd)
@@ -1764,6 +2182,9 @@ static void state_update(struct osdp_pd *pd)
 	int err;
 	bool status;
 	enum osdp_cp_state_e next, cur = pd->state;
+#ifdef OPT_BUILD_OSDP_TRS
+	bool trs_probe_open = false;
+#endif
 
 	if (cp_phy_running(pd)) {
 		err = cp_phy_state_update(pd);
@@ -1785,13 +2206,40 @@ static void state_update(struct osdp_pd *pd)
 		__fallthrough;
 	case OSDP_CP_PHY_STATE_DONE:
 		status = state_check_reply(pd);
-		notify_command_status(pd, status);
-		cp_complete_cmd(pd, pd->active_cmd,
-				status ? OSDP_COMPLETION_OK : OSDP_COMPLETION_FAILED);
+		if (status && pd->active_cmd && !pd->engine_cmd &&
+		    osdp_bio_owns_cmd(pd, pd->cmd_id)) {
+			/*
+			 * A multipart BIOREADR is still reassembling across
+			 * polls. Hand the command to the engine, which
+			 * completes it at MP_DONE, and free the phy layer for
+			 * the polls that pull the remaining fragments. A
+			 * failed reply needs none of this: there is no
+			 * reassembly left to wait for.
+			 *
+			 * The slot is taken only when it is free. Unlike file
+			 * and PIV, nothing stops a BIOREAD from being queued
+			 * mid file transfer, and displacing that transfer's
+			 * command would strand it; such a reply settles here,
+			 * as it did before.
+			 */
+			cp_own_engine_cmd(pd, pd->active_cmd,
+					  OSDP_MP_MSG_BIOREAD);
+		} else {
+			if (status && pd->active_cmd && pd->engine_cmd &&
+			    osdp_bio_owns_cmd(pd, pd->cmd_id)) {
+				/* The only notice an app gets that the
+				 * reassembly guarantee lapsed for this one. */
+				LOG_WRN("BIOREAD completes at first fragment; "
+					"another engine holds this PD");
+			}
+			cp_complete_cmd(pd, pd->active_cmd,
+					status ? OSDP_COMPLETION_OK :
+						 OSDP_COMPLETION_FAILED);
+		}
 		pd->active_cmd = NULL;
 		if (!status) {
-			err = cp_cmd_failure_is_soft(pd) ? OSDP_CP_ERR_NONE
-							 : OSDP_CP_ERR_GENERIC;
+			err = cp_cmd_failure_is_soft(pd) ? OSDP_CP_ERR_NONE :
+							   OSDP_CP_ERR_GENERIC;
 			if (err == OSDP_CP_ERR_NONE &&
 			    pd->cmd_id == CMD_FILETRANSFER) {
 				/* Going offline used to do this for us. */
@@ -1814,6 +2262,18 @@ static void state_update(struct osdp_pd *pd)
 		 * pick (and any pending session-scoped request): reconnect
 		 * from scratch via the OFFLINE dwell. */
 		next = OSDP_CP_STATE_OFFLINE;
+#ifdef OPT_BUILD_OSDP_TRS
+	} else if (cur == OSDP_CP_STATE_TRS_SETUP ||
+		   cur == OSDP_CP_STATE_TRS_RUN) {
+		/* TRS runs a nested sub-FSM; advancing it mutates pd->trs, so it
+		 * stays out of the pure protocol tables and runs here, once per
+		 * pass, right where the next protocol state is decided. */
+		next = (err == OSDP_CP_ERR_NONE) ? osdp_trs_state_update(pd)
+						 : osdp_trs_state_update_err(pd);
+		if (osdp_trs_scan_declined(pd)) {
+			notify_trs_status(pd, OSDP_TRS_SCAN_NO_DEPARTURE);
+		}
+#endif
 	} else {
 		next = get_next_state(pd, err);
 		cp_transition_effects(pd, cur, next, err);
@@ -1828,6 +2288,19 @@ static void state_update(struct osdp_pd *pd)
 				LOG_INF("Going offline due to request");
 				next = OSDP_CP_STATE_OFFLINE;
 			}
+#ifdef OPT_BUILD_OSDP_TRS
+			/* A START was dequeued, or a presence probe fell due:
+			 * open a TRS session. SCAN also carries the probe flag
+			 * so the entry bookkeeping below can strip the app-band
+			 * state that TRS_SETUP sets up by default. */
+			if (check_request(pd, CP_REQ_TRS_OPEN)) {
+				next = OSDP_CP_STATE_TRS_SETUP;
+			}
+			if (check_request(pd, CP_REQ_TRS_SCAN)) {
+				next = OSDP_CP_STATE_TRS_SETUP;
+				trs_probe_open = true;
+			}
+#endif
 		}
 	}
 
@@ -1848,13 +2321,88 @@ static void state_update(struct osdp_pd *pd)
 	if (cur != next) {
 		cp_state_change(pd, next);
 	}
+#ifdef OPT_BUILD_OSDP_TRS
+	if (trs_probe_open && next == OSDP_CP_STATE_TRS_SETUP) {
+		/* A probe undoes the app-band bookkeeping the TRS_SETUP entry
+		 * just set up: no band to flush, no session notifications. */
+		osdp_trs_probe_note_open(pd);
+	}
+#endif
 }
+
+#ifdef OPT_BUILD_OSDP_TRS
+/*
+ * Decide whether a command may join the queue, and move the band with it. The
+ * band boundary is a position in the queue, so it is decided here -- at the tail
+ * the command is about to be appended to -- and never at dequeue: by the time a
+ * command is dequeued, the app has long since been told it was accepted.
+ */
+static int cp_band_admit(struct osdp_pd *pd, const struct osdp_cmd *cmd)
+{
+	if (cp_cmd_is_trs(cmd, OSDP_TRS_CMD_START)) {
+		if (pd->trs.band_open) {
+			LOG_ERR("A TRS session is already open; STOP it first");
+			return -1;
+		}
+		pd->trs.band_open = true;
+		return 0;
+	}
+	if (cp_cmd_is_trs(cmd, OSDP_TRS_CMD_STOP)) {
+		if (!pd->trs.band_open) {
+			LOG_ERR("TRS stop without a session to close");
+			return -1;
+		}
+		pd->trs.band_open = false;
+		return 0;
+	}
+	if (cmd->id == OSDP_CMD_XWR && !pd->trs.band_open) {
+		LOG_ERR("TRS command outside a session; queue a START first");
+		return -1;
+	}
+	/*
+	 * Both carriers of a C-APDU are checked here so an oversized one is
+	 * turned away while the app can still act on it; the frame builder
+	 * would otherwise catch it only once the band is already running.
+	 */
+	if (cp_cmd_is_trs(cmd, OSDP_TRS_CMD_SEND_APDU) ||
+	    cp_cmd_is_trs(cmd, OSDP_TRS_CMD_ENTER_PIN)) {
+		bool is_pin = cmd->trs.command == OSDP_TRS_CMD_ENTER_PIN;
+		int apdu_len = is_pin ? cmd->trs.pin_entry.apdu.length :
+					cmd->trs.apdu.length;
+		int capacity = osdp_trs_apdu_capacity(pd, cmd->trs.command);
+
+		if (apdu_len > capacity) {
+			LOG_ERR("C-APDU of %d bytes cannot fit the %d-byte "
+				"packet (max %d for this command)",
+				apdu_len, get_tx_buf_size(pd), capacity);
+			return -1;
+		}
+	}
+	if (cmd->id != OSDP_CMD_XWR && pd->trs.band_open) {
+		/*
+		 * Sending it would interrupt the card transaction; queuing it
+		 * would stall the APDUs behind it. Neither is ours to choose.
+		 */
+		LOG_ERR("Cannot queue %s inside a TRS session",
+			osdp_cmd_name(cp_translate_cmd(pd, cmd)));
+		return -1;
+	}
+	return 0;
+}
+#endif
 
 static int cp_submit_command(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 {
+	int ret;
 	const uint32_t all_flags = (
 		OSDP_CMD_FLAG_BROADCAST
 	);
+
+	if (!pd_to_osdp(pd)->command_completion_callback) {
+		LOG_ERR("Refusing command: no completion callback registered;"
+			" it is how command ownership returns to the app");
+		return -1;
+	}
 
 	if (pd->state == OSDP_CP_STATE_DISABLED) {
 		LOG_ERR("PD is disabled");
@@ -1892,19 +2440,46 @@ static int cp_submit_command(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 	}
 
 	if (cmd->id == OSDP_CMD_FILE_TX) {
-		return osdp_file_tx_command(pd, cmd->file_tx.id,
-					    cmd->file_tx.flags);
+		ret = osdp_file_tx_command(pd, cmd->file_tx.id,
+					   cmd->file_tx.flags);
+		if (ret == 0) {
+			/* The engine owns it now; it completes at MP_DONE. */
+			cp_own_engine_cmd(pd, cmd, OSDP_MP_MSG_FILE_TRANSFER);
+		}
+		return ret;
 	} else if (cmd->id == OSDP_CMD_PIVDATA ||
 		   cmd->id == OSDP_CMD_GENAUTH ||
 		   cmd->id == OSDP_CMD_CRAUTH) {
 		/* Multi-exchange op driven from the refresh loop (like
 		 * FILE_TX); it does not ride the command queue. */
-		return osdp_piv_cp_submit(pd, cmd);
+		ret = osdp_piv_cp_submit(pd, cmd);
+		if (ret == 0) {
+			cp_own_engine_cmd(pd, cmd, cp_cmd_mp_type(cmd->id));
+		}
+		return ret;
 	} else if (cmd->id == OSDP_CMD_KEYSET &&
 		   (cmd->keyset.type != 1 || !sc_is_active(pd))) {
 		LOG_ERR("Invalid keyset request");
 		return -1;
 	}
+
+	if (cmd->id == OSDP_CMD_XWR) {
+#ifdef OPT_BUILD_OSDP_TRS
+		if (!trs_capable(pd)) {
+			LOG_ERR("PD has no smart-card support; dropping XWR");
+			return -1;
+		}
+#else
+		LOG_ERR("TRS support not enabled in this build");
+		return -1;
+#endif
+	}
+
+#ifdef OPT_BUILD_OSDP_TRS
+	if (cp_band_admit(pd, cmd)) {
+		return -1;
+	}
+#endif
 
 	return cp_cmd_enqueue(pd, cmd);
 }
@@ -1936,8 +2511,7 @@ static void cp_collect_init_flags(struct osdp_pd *pd, uint32_t flags)
 
 static int cp_expand_pd_array(struct osdp *ctx, int num_pd,
 			      struct osdp_pd **old_pd_array,
-			      struct osdp_pd **new_pd_array,
-			      int *old_num_pd)
+			      struct osdp_pd **new_pd_array, int *old_num_pd)
 {
 	*old_num_pd = ctx->_num_pd;
 	*old_pd_array = ctx->pd;
@@ -1982,6 +2556,31 @@ static int cp_setup_pd_rx_storage(struct osdp *ctx, struct osdp_pd *pd, int pd_i
 	return 0;
 }
 
+/*
+ * Undo cp_setup_pd_rx_storage() and the capture context for PDs that were
+ * already built when a later one failed. The static pools are owned by their
+ * allocators, so this is a no-op there; the caller memsets those slots.
+ */
+static void cp_release_pd_resources(struct osdp_pd *pd_array, int count)
+{
+	struct osdp_pd *pd;
+	int i;
+
+	for (i = 0; i < count; i++) {
+		pd = pd_array + i;
+		if (is_capture_enabled(pd)) {
+			osdp_packet_capture_finish(pd);
+		}
+#ifndef OPT_OSDP_STATIC
+#ifdef OPT_OSDP_RX_ZERO_COPY
+		safe_free(pd->rx_pkt);
+#else
+		safe_free(pd->rx_rb);
+#endif
+#endif /* OPT_OSDP_STATIC */
+	}
+}
+
 static int cp_add_pd(struct osdp *ctx, int num_pd, const osdp_pd_info_t *info_list)
 {
 	int i, old_num_pd;
@@ -2012,6 +2611,11 @@ static int cp_add_pd(struct osdp *ctx, int num_pd, const osdp_pd_info_t *info_li
 		pd->flags = 0;
 		pd->seq_number = -1;
 		cp_collect_init_flags(pd, info->flags);
+		if (init_flags_conflict(info->flags)) {
+			LOG_PRINT("ENFORCE_SECURE and INSTALL_MODE are"
+				  " mutually exclusive");
+			goto error;
+		}
 		SET_FLAG(pd, PD_FLAG_SC_DISABLED);
 		/* Default to CRC-16 until we know PD capabilities */
 		SET_FLAG(pd, PD_FLAG_CP_USE_CRC);
@@ -2025,6 +2629,10 @@ static int cp_add_pd(struct osdp *ctx, int num_pd, const osdp_pd_info_t *info_li
 			LOG_PRINT("SCBK must be passed for each PD when"
 				  " ENFORCE_SECURE is requested.");
 			goto error;
+		} else {
+			LOG_WRN("SCBK not provided; secure channel is"
+				" disabled. This PD will be polled in plain"
+				" text");
 		}
 		if (cp_cmd_queue_init(pd)) {
 			goto error;
@@ -2041,17 +2649,26 @@ static int cp_add_pd(struct osdp *ctx, int num_pd, const osdp_pd_info_t *info_li
 
 #ifndef OPT_OSDP_STATIC
 	if (old_num_pd) {
-		free(old_pd_array);
+		/* The copy handed to the new array carries the SCBKs and live
+		 * session keys of every PD already registered. */
+		osdp_fill_zeros(old_pd_array,
+				sizeof(struct osdp_pd) * old_num_pd);
+		osdp_free(old_pd_array);
 	}
 #endif
 	return 0;
 
 error:
+	/* `i` is the PD that failed; it may be half-built, so it is included
+	 * in the release sweep along with every PD before it. */
+	cp_release_pd_resources(new_pd_array + old_num_pd, i + 1);
 	ctx->pd = old_pd_array;
 	ctx->_num_pd = old_num_pd;
 
 #ifndef OPT_OSDP_STATIC
-	free(new_pd_array);
+	osdp_fill_zeros(new_pd_array,
+			sizeof(struct osdp_pd) * (old_num_pd + num_pd));
+	osdp_free(new_pd_array);
 #else
 	memset(new_pd_array + old_num_pd, 0, sizeof(struct osdp_pd) * num_pd);
 #endif
@@ -2084,8 +2701,7 @@ osdp_t *osdp_cp_setup(const struct osdp_channel *channel, int num_pd,
 	}
 
 	LOG_PRINT("CP Setup complete; LibOSDP-%s %s NumPDs:%d",
-		  osdp_get_version(), osdp_get_source_info(),
-		  NUM_PD(ctx));
+		  osdp_get_version(), osdp_get_source_info(), NUM_PD(ctx));
 	return ctx;
 error:
 	osdp_cp_teardown((osdp_t *)ctx);
@@ -2116,14 +2732,26 @@ void osdp_cp_teardown(osdp_t *ctx)
 	input_check(ctx);
 	int i;
 	struct osdp_pd *pd;
-	const struct osdp_cmd *cmd;
 	struct osdp *cp_ctx = TO_OSDP(ctx);
+
+	if (cp_ctx->tearing_down) {
+		return; /* re-entrant teardown from a completion */
+	}
+	cp_ctx->tearing_down = true;
 
 	for (i = 0; i < cp_ctx->_num_pd; i++) {
 		pd = osdp_to_pd(cp_ctx, i);
-		while (cp_cmd_dequeue(pd, &cmd) == 0) {
-			cp_complete_cmd(pd, cmd, OSDP_COMPLETION_ABORTED);
-			cp_cmd_free(pd, cmd);
+		cp_drain_queue(pd, OSDP_COMPLETION_ABORTED);
+		if (pd->engine_cmd) {
+			/* An engine that never reached osdp_mp_finish(). Where
+			 * an abort path did fire MP_DONE, the hook in
+			 * osdp_mp_pd_notify() already cleared the slot, so
+			 * this cannot double-complete. */
+			const struct osdp_cmd *ecmd = pd->engine_cmd;
+
+			pd->engine_cmd = NULL;
+			cp_complete_engine_cmd(pd, ecmd,
+					       OSDP_COMPLETION_ABORTED);
 		}
 		cp_complete_cmd(pd, pd->active_cmd, OSDP_COMPLETION_ABORTED);
 		pd->active_cmd = NULL;
@@ -2142,7 +2770,6 @@ void osdp_cp_teardown(osdp_t *ctx)
 		safe_free(pd->rx_rb);
 #endif
 #endif /* OPT_OSDP_STATIC */
-
 	}
 
 	if (cp_ctx->channel.close) {
@@ -2158,6 +2785,7 @@ void osdp_cp_teardown(osdp_t *ctx)
 void osdp_cp_refresh(osdp_t *ctx)
 {
 	input_check(ctx);
+	input_check_not_tearing_down_noret(ctx);
 	int next_pd_idx, refresh_count = 0;
 	struct osdp_pd *pd;
 	struct osdp *cp_ctx = TO_OSDP(ctx);
@@ -2207,35 +2835,154 @@ void osdp_cp_set_command_completion_callback(osdp_t *ctx,
 	TO_OSDP(ctx)->command_completion_callback_arg = arg;
 }
 
-int osdp_cp_send_command(osdp_t *ctx, int pd_idx, const struct osdp_cmd *cmd)
+int osdp_cp_submit_command(osdp_t *ctx, int pd_idx, const struct osdp_cmd *cmd)
 {
 	input_check(ctx, pd_idx);
+	input_check_not_tearing_down(ctx);
 	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
 
 	return cp_submit_command(pd, cmd);
 }
 
-int osdp_cp_submit_command(osdp_t *ctx, int pd_idx, const struct osdp_cmd *cmd)
+/*
+ * Detach the queue, then drain the detached copy. A completion may submit,
+ * flush or tear down, and must not mutate the list this loop is walking.
+ * list_t holds only head/tail and node_t has no back-pointer to its list, so
+ * taking the struct by value and re-initialising the live one is a safe O(1)
+ * splice that needs no new c-utils API.
+ */
+static int cp_drain_queue(struct osdp_pd *pd,
+			  enum osdp_completion_status status)
+{
+	queue_t drain = pd->cmd_queue;
+	const struct osdp_cmd *cmd;
+	queue_node_t *node;
+	int count = 0;
+
+	queue_init(&pd->cmd_queue);
+	while (queue_dequeue(&drain, &node) == 0) {
+		cmd = CONTAINER_OF(node, struct osdp_cmd, _node);
+		cp_complete_cmd(pd, cmd, status);
+		cp_cmd_free(pd, cmd);
+		count++;
+	}
+	return count;
+}
+
+int osdp_cp_cancel(osdp_t *ctx, int pd_idx, enum osdp_mp_msg_type what)
 {
 	input_check(ctx, pd_idx);
+	input_check_not_tearing_down(ctx);
 	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
 
-	return cp_submit_command(pd, cmd);
+	/*
+	 * Dispatch on what the app names, not on which engine happens to hold
+	 * the completion slot: an operation that never took the slot is still
+	 * on the wire and still cancellable. Each engine answers -1 when it is
+	 * not running the named op.
+	 */
+	switch (what) {
+	case OSDP_MP_MSG_FILE_TRANSFER:
+		return osdp_file_tx_request_cancel(pd);
+	case OSDP_MP_MSG_PIV:
+	case OSDP_MP_MSG_GENAUTH:
+	case OSDP_MP_MSG_CRAUTH:
+		return osdp_piv_request_cancel(pd, (int)what);
+	case OSDP_MP_MSG_BIOREAD:
+		return osdp_bio_request_cancel(pd);
+	default:
+		LOG_ERR("Cancel: unknown multi-part type %d", (int)what);
+		return -1;
+	}
 }
 
 int osdp_cp_flush_commands(osdp_t *ctx, int pd_idx)
 {
 	input_check(ctx, pd_idx);
+	input_check_not_tearing_down(ctx);
 	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
-	const struct osdp_cmd *cmd;
-	int count = 0;
+	int count;
 
-	while (cp_cmd_dequeue(pd, &cmd) == 0) {
-		cp_complete_cmd(pd, cmd, OSDP_COMPLETION_FLUSHED);
-		cp_cmd_free(pd, cmd);
-		count++;
-	}
+	count = cp_drain_queue(pd, OSDP_COMPLETION_FLUSHED);
+#ifdef OPT_BUILD_OSDP_TRS
+	/*
+	 * The band markers went out with the queue, so the tail is now wherever
+	 * the state machine is: still inside a session that only a STOP can
+	 * close, or outside one. This is what makes flush-then-STOP an abort.
+	 */
+	pd->trs.band_open = ISSET_FLAG(pd, PD_FLAG_TRS_ACTIVE) &&
+			    pd->trs.stop_pending;
+#endif
 	return count;
+}
+
+int osdp_cp_trs_scan_enable(osdp_t *ctx, int pd_idx,
+			    const struct osdp_trs_scan_params *params)
+{
+	input_check(ctx, pd_idx);
+#ifdef OPT_BUILD_OSDP_TRS
+	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
+	struct osdp_trs *trs = &pd->trs;
+
+	trs->scan.mode0_dwell_ms = (params && params->mode0_dwell_ms) ?
+		params->mode0_dwell_ms : OSDP_TRS_SCAN_MODE0_DWELL_MS;
+	trs->scan.mode1_dwell_ms = (params && params->mode1_dwell_ms) ?
+		params->mode1_dwell_ms : OSDP_TRS_SCAN_MODE1_DWELL_MS;
+	trs->scan.hold_ms = (params && params->hold_ms) ?
+		params->hold_ms : OSDP_TRS_SCAN_HOLD_MS;
+	trs->scan.backoff_ms = 0;
+	trs->scan.holding = false;
+	trs->scan.tstamp = osdp_millis_now();
+	/* A fresh scan reports the first presence it sees, whatever the
+	 * previous one had already told the app. */
+	trs->scan.last_status = OSDP_TRS_CARD_STATUS_UNKNOWN;
+	trs->scan.warned = false;
+	trs->scan.enabled = true;
+	/*
+	 * Whether this PD has a reader to scan is only known once its
+	 * capabilities have been collected, and a scan is normally enabled at
+	 * startup, before any PD is online. Warn now if the answer is already
+	 * in; otherwise the capability report raises it when it arrives.
+	 */
+	if (pd->state == OSDP_CP_STATE_ONLINE) {
+		osdp_trs_scan_note_capability(pd);
+	}
+	return 0;
+#else
+	ARG_UNUSED(params);
+	LOG_PRINT("TRS support not built in");
+	return -1;
+#endif
+}
+
+int osdp_cp_trs_scan_disable(osdp_t *ctx, int pd_idx)
+{
+	input_check(ctx, pd_idx);
+#ifdef OPT_BUILD_OSDP_TRS
+	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
+
+	/* A probe in flight winds down on its own: with the scan off,
+	 * osdp_trs_probe_expired() is immediately true and the next TRS tick
+	 * restores the reader's default mode. */
+	pd->trs.scan.enabled = false;
+	pd->trs.scan.holding = false;
+	pd->trs.scan.backoff_ms = 0;
+	return 0;
+#else
+	LOG_PRINT("TRS support not built in");
+	return -1;
+#endif
+}
+
+int osdp_cp_trs_get_max_apdu_len(const osdp_t *ctx, int pd_idx)
+{
+	input_check(ctx, pd_idx);
+#ifdef OPT_BUILD_OSDP_TRS
+	return osdp_trs_max_apdu_len(osdp_to_pd(ctx, pd_idx));
+#else
+	LOG_PRINT("TRS support not built in");
+	return -1;
+#endif
 }
 
 int osdp_cp_get_pd_id(const osdp_t *ctx, int pd_idx, struct osdp_pd_id *id)
@@ -2266,9 +3013,16 @@ int osdp_cp_get_capability(const osdp_t *ctx, int pd_idx, struct osdp_pd_cap *ca
 int osdp_cp_modify_flag(osdp_t *ctx, int pd_idx, uint32_t flags, bool do_set)
 {
 	input_check(ctx, pd_idx);
+	/*
+	 * INSTALL_MODE is absent by design: permitting SCBK-D is a
+	 * provisioning-time decision that setup validated against the rest of
+	 * the configuration, and there is nothing to re-decide on a live link.
+	 * CAPTURE_PACKETS is absent too -- the capture context is opened at
+	 * setup, so setting the flag later would leave it with nowhere to
+	 * write.
+	 */
 	const uint32_t all_flags = (
 		OSDP_FLAG_ENFORCE_SECURE |
-		OSDP_FLAG_INSTALL_MODE |
 		OSDP_FLAG_IGN_UNSOLICITED |
 		OSDP_FLAG_ENABLE_NOTIFICATION |
 		OSDP_FLAG_ALLOW_EMPTY_ENCRYPTED_DATA_BLOCK
@@ -2281,19 +3035,25 @@ int osdp_cp_modify_flag(osdp_t *ctx, int pd_idx, uint32_t flags, bool do_set)
 	}
 
 	if (flags & OSDP_FLAG_ENFORCE_SECURE) {
+		/* One-way latch: an app may raise its guard on a running link,
+		 * never lower it, and never raise it on a PD that has no key
+		 * to raise it with -- setup rejects that pairing. */
+		if (!do_set) {
+			LOG_ERR("ENFORCE_SECURE cannot be cleared at runtime");
+			return -1;
+		}
+		if (ISSET_FLAG(pd, PD_FLAG_SC_DISABLED)) {
+			LOG_ERR("ENFORCE_SECURE needs an SCBK; this PD has"
+				" none");
+			return -1;
+		}
 		pd_flags |= PD_FLAG_ENFORCE_SECURE;
-	}
-	if (flags & OSDP_FLAG_INSTALL_MODE) {
-		pd_flags |= PD_FLAG_INSTALL_MODE;
 	}
 	if (flags & OSDP_FLAG_IGN_UNSOLICITED) {
 		pd_flags |= PD_FLAG_IGNORE_USR;
 	}
 	if (flags & OSDP_FLAG_ENABLE_NOTIFICATION) {
 		pd_flags |= PD_FLAG_ENABLE_NOTIF;
-	}
-	if (flags & OSDP_FLAG_CAPTURE_PACKETS) {
-		pd_flags |= PD_FLAG_CAPTURE_PKT;
 	}
 	if (flags & OSDP_FLAG_ALLOW_EMPTY_ENCRYPTED_DATA_BLOCK) {
 		pd_flags |= PD_FLAG_ALLOW_EMPTY_EDB;

@@ -7,13 +7,14 @@
 #include "osdp_common.h"
 #include "osdp_diag.h"
 #include "osdp_metrics.h"
+#include "osdp_trs.h"
 
-#define OSDP_PKT_MARK                  0xFF
-#define OSDP_PKT_SOM                   0x53
-#define PKT_CONTROL_SQN                0x03
-#define PKT_CONTROL_CRC                0x04
-#define PKT_CONTROL_SCB                0x08
-#define PKT_TRACE_MANGLED              0x80
+#define OSDP_PKT_MARK	  0xFF
+#define OSDP_PKT_SOM	  0x53
+#define PKT_CONTROL_SQN	  0x03
+#define PKT_CONTROL_CRC	  0x04
+#define PKT_CONTROL_SCB	  0x08
+#define PKT_TRACE_MANGLED 0x80
 
 PACK(struct osdp_packet_header {
 	uint8_t som;
@@ -205,6 +206,7 @@ int osdp_phy_in_sc_handshake(int is_reply, int id)
 int osdp_phy_packet_init(struct osdp_pd *pd, uint8_t *buf, int max_len)
 {
 	int id, scb_len = 0;
+	bool busy;
 	struct osdp_packet_header *pkt;
 
 	if (max_len < OSDP_MINIMUM_PACKET_SIZE) {
@@ -226,7 +228,7 @@ int osdp_phy_packet_init(struct osdp_pd *pd, uint8_t *buf, int max_len)
 	/* Fill packet header */
 	pkt = (struct osdp_packet_header *)buf;
 	pkt->som = OSDP_PKT_SOM;
-	pkt->pd_address = pd->address & 0x7F;	/* Use only the lower 7 bits */
+	pkt->pd_address = pd->address & 0x7F; /* Use only the lower 7 bits */
 	if (ISSET_FLAG(pd, PD_FLAG_PKT_BROADCAST)) {
 		pkt->pd_address = 0x7F;
 		CLEAR_FLAG(pd, PD_FLAG_PKT_BROADCAST);
@@ -238,14 +240,32 @@ int osdp_phy_packet_init(struct osdp_pd *pd, uint8_t *buf, int max_len)
 	} else {
 		id = pd->cmd_id;
 	}
-	pkt->control = phy_get_next_seq_number(pd);
+	/**
+	 * osdp_BUSY does not follow the sequence and security rules of the
+	 * exchange it interrupts. Per v2.2 section 7.19 a busy PD answers on
+	 * sequence 0 in a plain packet of minimum length, even while a secure
+	 * channel is active; the CP then repeats the command with its original
+	 * sequence number. Our own CP-side decoder already depends on exactly
+	 * that shape -- osdp_phy_decode_packet() matches BUSY on (comp == 0),
+	 * pkt_len == 6 and no SCB -- so this is the encoder catching up with
+	 * what the decoder has always expected.
+	 *
+	 * It has to be special-cased here: phy_get_next_seq_number() cycles
+	 * 1..3 and never yields 0, and the SCB below would otherwise be
+	 * attached whenever the channel is up.
+	 */
+	busy = is_pd_mode(pd) && id == REPLY_BUSY;
+
+	pkt->control = busy ? 0 : phy_get_next_seq_number(pd);
 	pd->phy_tx_seq = pkt->control & PKT_CONTROL_SQN;
 	if (is_pd_mode(pd) ||
 	    (is_cp_mode(pd) && ISSET_FLAG(pd, PD_FLAG_CP_USE_CRC))) {
 		pkt->control |= PKT_CONTROL_CRC;
 	}
 
-	if (sc_is_active(pd)) {
+	if (busy) {
+		/* No SCB, even under an active secure channel (v2.2 7.19). */
+	} else if (sc_is_active(pd)) {
 		pkt->control |= PKT_CONTROL_SCB;
 		pkt->data[0] = scb_len = 2;
 		pkt->data[1] = SCS_15;
@@ -405,7 +425,7 @@ int osdp_phy_send_packet(struct osdp_pd *pd, uint8_t *buf, int len)
 }
 
 static int phy_validate_header(struct osdp_pd *pd, uint8_t *buf,
-                               unsigned long buf_len, unsigned long max_len)
+			       unsigned long buf_len, unsigned long max_len)
 {
 	struct osdp_packet_header *pkt;
 	unsigned long pkt_len;
@@ -432,7 +452,14 @@ static int phy_validate_header(struct osdp_pd *pd, uint8_t *buf,
 	}
 
 	pkt_len = ((uint32_t)pkt->len_msb << 8) | pkt->len_lsb;
-	if (pkt_len > max_len ||
+	/**
+	 * The mark byte is not counted in the packet's length field but it is
+	 * buffered along with the packet, so it must be charged against the
+	 * space the packet has to fit into. Validating pkt_len alone lets a
+	 * peer declare a full-capacity packet behind a mark byte and overrun
+	 * the buffer by one byte.
+	 */
+	if (pkt_len + mark > max_len ||
 	    pkt_len < sizeof(struct osdp_packet_header) + 1) {
 		return OSDP_ERR_PKT_FMT;
 	}
@@ -609,17 +636,16 @@ static int phy_check_packet(struct osdp_pd *pd, uint8_t *buf, int pkt_len)
 		if (comp == 0) {
 			/**
 			 * CP is trying to restart communication by sending a 0.
-			 * The current PD implementation does not hold any state
-			 * between commands so we can just set seq_number to -1
-			 * (so it gets incremented to 0 with a call to
-			 * phy_get_seq_number()) and invalidate any established
-			 * secure channels.
+			 * Set seq_number to -1 (so it gets incremented to 0 with
+			 * a call to phy_get_seq_number()), invalidate any
+			 * established secure channels, and drop the little state
+			 * the PD does carry between commands.
 			 */
 			phy_reset_seq_number(pd);
 			pd->last_tx_len = 0;
 			sc_deactivate(pd);
-		}
-		else if (comp == pd->seq_number) {
+			osdp_trs_pd_reset(pd);
+		} else if (comp == pd->seq_number) {
 			/**
 			 * CP re-sent the same command without incrementing the
 			 * sequence number. Per OSDP spec, we must re-emit the
@@ -852,20 +878,29 @@ int osdp_phy_decode_packet(struct osdp_pd *pd, uint8_t **pkt_start)
 			 * the rest of this method finishes normally. The actual
 			 * secure channel is actually discarded from the CP
 			 * state machine.
+			 *
+			 * v2.2 D.1.4 has no exception for this ack, so the
+			 * tolerance is a deliberate departure from the spec --
+			 * and it is what lets one injected six-byte frame make
+			 * the CP commit a key the PD never received. An app
+			 * that asked for ENFORCE_SECURE asked for no such
+			 * departures, so it does not get this one.
 			 */
-			if (pd->cmd_id == CMD_KEYSET && pkt->data[0] == REPLY_ACK) {
-				is_sc_active = false;
-			}
-			/**
-			 * When the PD discards it's secure channel for some
-			 * reason, it responds with NACK(6) in plaintext. There
-			 * may be other cases too. So we will allow NAKs in
-			 */
-			if (is_sc_active && pkt->data[0] == REPLY_NAK) {
+			if (pd->cmd_id == CMD_KEYSET &&
+			    pkt->data[0] == REPLY_ACK &&
+			    !is_enforce_secure(pd)) {
 				is_sc_active = false;
 			}
 		}
 		if (is_sc_active) {
+			/**
+			 * v2.2 D.1.1 makes osdp_BUSY the only reply that may
+			 * skip the secure channel, and D.1.4 requires every
+			 * other one to carry SCS_16 or SCS_18. A PD that lost
+			 * its session cannot MAC anything, so it has nothing
+			 * to say here that we can believe: drop the frame and
+			 * let the CP re-run the handshake.
+			 */
 			LOG_ERR("Received plain-text message in SC");
 			pd->reply_id = REPLY_NAK;
 			pd->nak_code = OSDP_PD_NAK_SC_COND;
@@ -873,8 +908,8 @@ int osdp_phy_decode_packet(struct osdp_pd *pd, uint8_t **pkt_start)
 		}
 	}
 
-	if (is_sc_active &&
-	    pkt->control & PKT_CONTROL_SCB && pkt->data[1] >= SCS_15) {
+	if (is_sc_active && pkt->control & PKT_CONTROL_SCB &&
+	    pkt->data[1] >= SCS_15) {
 		/* validate MAC */
 		is_cmd = is_pd_mode(pd);
 		osdp_compute_mac(pd, is_cmd, buf, mac_offset);

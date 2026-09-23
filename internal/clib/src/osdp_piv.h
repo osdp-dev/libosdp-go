@@ -17,7 +17,7 @@
  * reply leg's fragments are pulled by the CP with osdp_POLL. */
 enum osdp_piv_phase {
 	OSDP_PIV_IDLE = 0,
-	OSDP_PIV_CMD,   /* command leg in flight */
+	OSDP_PIV_CMD, /* command leg in flight */
 	OSDP_PIV_REPLY, /* reply leg in flight (or awaiting the app's data) */
 };
 
@@ -26,16 +26,16 @@ struct osdp_piv {
 	 * engine-internal and re-initialized per leg. Every reset path must go
 	 * through piv_op_reset() so the two cannot desync. */
 	enum osdp_piv_phase phase;
-	int mp_msg;         /* OSDP_MP_MSG_* of the active op */
-	uint8_t app_cmd;    /* OSDP_CMD_PIVDATA/... */
-	uint8_t wire_cmd;   /* CMD_PIVDATA/... */
+	int mp_msg; /* OSDP_MP_MSG_* of the active op */
+	uint8_t app_cmd; /* OSDP_CMD_PIVDATA/... */
+	uint8_t wire_cmd; /* CMD_PIVDATA/... */
 	uint8_t wire_reply; /* REPLY_PIVDATAR/... */
 	uint8_t event_type; /* OSDP_EVENT_* the reply surfaces as */
 	bool start_emitted; /* one MP_START per op, not per leg */
-	uint8_t algorithm;  /* GENAUTH/CRAUTH first-fragment prefix */
+	uint8_t algorithm; /* GENAUTH/CRAUTH first-fragment prefix */
 	uint8_t key;
 	struct osdp_cmd_pivdata req; /* PIVDATA request arguments */
-	tick_t tstamp;      /* last forward progress; bounds a stalled op */
+	tick_t tstamp; /* last forward progress; bounds a stalled op */
 	struct osdp_multipart mp; /* one leg at a time */
 	uint8_t data[OSDP_PIV_DATA_MAX_LEN]; /* staging for the active leg */
 };
@@ -44,6 +44,8 @@ bool osdp_piv_is_active(struct osdp_pd *pd);
 /* True when the active PIV op's wire command is `cmd_id`. */
 bool osdp_piv_owns_cmd(struct osdp_pd *pd, int cmd_id);
 void osdp_piv_abort(struct osdp_pd *pd);
+/* Ask the running op to stop. -1 unless an op of `mp_msg` is in progress. */
+int osdp_piv_request_cancel(struct osdp_pd *pd, int mp_msg);
 
 /* --- CP role --- */
 int osdp_piv_cp_submit(struct osdp_pd *pd, const struct osdp_cmd *cmd);
@@ -56,6 +58,8 @@ void osdp_piv_cp_cmd_acked(struct osdp_pd *pd);
  * -1 when no op expects this reply. */
 int osdp_piv_cp_reply_consume(struct osdp_pd *pd, const uint8_t *buf, int len,
 			      struct osdp_event *event);
+/* Finish the op whose reply _consume() returned 1 for; call after dispatch. */
+void osdp_piv_cp_reply_finish(struct osdp_pd *pd);
 
 /* --- PD role --- */
 /* Prepare the per-PD context for an incoming command of `wire_cmd`'s family

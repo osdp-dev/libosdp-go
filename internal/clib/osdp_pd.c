@@ -10,6 +10,7 @@
 #include "osdp_bio.h"
 #include "osdp_diag.h"
 #include "osdp_metrics.h"
+#include "osdp_trs.h"
 
 #ifndef OPT_OSDP_STATIC
 #include <stdlib.h>
@@ -27,6 +28,9 @@ enum osdp_pd_error_e {
 	 * must yield and re-invoke pd_send_reply on the next refresh. */
 	OSDP_PD_ERR_RETRY_SEND = -6,
 };
+
+static int pd_drain_queue(struct osdp_pd *pd,
+			  enum osdp_completion_status status);
 
 /* Implicit capabilities */
 static struct osdp_pd_cap osdp_pd_cap[] = {
@@ -91,8 +95,11 @@ static inline void pd_complete_event(struct osdp_pd *pd,
 {
 	if (!event || !pd->event_completion_callback)
 		return;
+	/* Ownership of the event returns to the application here, so it is
+	 * handed back mutable; the const above is the promise we made while
+	 * we held it. */
 	pd->event_completion_callback(pd->event_completion_callback_arg,
-				      event, status);
+				      (struct osdp_event *)event, status);
 	osdp_metrics_report(pd, OSDP_METRIC_EVENT);
 }
 
@@ -127,7 +134,8 @@ static bool event_is_reply_to(int cmd_id, const struct osdp_event *event)
 	}
 }
 
-static int pd_translate_event(struct osdp_pd *pd, const struct osdp_event *event)
+static int pd_translate_event(struct osdp_pd *pd,
+			      const struct osdp_event *event)
 {
 	int reply_code = 0;
 
@@ -154,7 +162,7 @@ static int pd_translate_event(struct osdp_pd *pd, const struct osdp_event *event
 		reply_code = REPLY_KEYPAD;
 		break;
 	case OSDP_EVENT_STATUS:
-		switch(event->status.type) {
+		switch (event->status.type) {
 		case OSDP_STATUS_REPORT_INPUT:
 			reply_code = REPLY_ISTATR;
 			break;
@@ -192,6 +200,12 @@ static int pd_translate_event(struct osdp_pd *pd, const struct osdp_event *event
 		break;
 	case OSDP_EVENT_CRAUTHR:
 		reply_code = REPLY_CRAUTHR;
+		break;
+	case OSDP_EVENT_TRS:
+		/* Deferred TRS reply: a card-data/APDU response the app
+		 * submitted after its CMD_XWR callback returned. Delivered as an
+		 * unsolicited REPLY_XRD on this poll. */
+		reply_code = REPLY_XRD;
 		break;
 	default:
 		LOG_ERR("Unknown event type %d", event->type);
@@ -266,7 +280,8 @@ static bool pd_take_inline_reply(struct osdp_pd *pd)
 {
 	const struct osdp_event *event;
 
-	if (pd_event_peek(pd, &event) || !event_is_reply_to(pd->cmd_id, event)) {
+	if (pd_event_peek(pd, &event) ||
+	    !event_is_reply_to(pd->cmd_id, event)) {
 		return false;
 	}
 	pd_event_dequeue(pd, &event);
@@ -633,8 +648,7 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 	}
 
 	switch (pd->cmd_id) {
-	case CMD_POLL:
-	{
+	case CMD_POLL: {
 		const struct osdp_event *queued_event;
 
 		if (len != 0) {
@@ -741,7 +755,7 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		if (len != CMD_ID_DATA_LEN) {
 			break;
 		}
-		pos++;		/* Skip reply type info. */
+		pos++; /* Skip reply type info. */
 		pd->reply_id = REPLY_PDID;
 		ret = OSDP_PD_ERR_NONE;
 		break;
@@ -749,7 +763,7 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		if (len != CMD_CAP_DATA_LEN) {
 			break;
 		}
-		pos++;		/* Skip reply type info. */
+		pos++; /* Skip reply type info. */
 		pd->reply_id = REPLY_PDCAP;
 		ret = OSDP_PD_ERR_NONE;
 		break;
@@ -1089,6 +1103,48 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		ret = OSDP_PD_ERR_NONE;
 		break;
 	}
+	case CMD_XWR: {
+		const struct osdp_event *trs_event;
+		int trs_ret;
+
+		trs_ret = osdp_trs_cmd_decode(pd, &cmd, buf + pos, len);
+		if (trs_ret < 0) {
+			break; /* NAK */
+		}
+		if (trs_ret == OSDP_TRS_DECODE_ACK) {
+			/* library-handled command (mode set / card terminate):
+			 * acknowledge per spec Table 36/42, no app payload */
+			pd->reply_id = REPLY_ACK;
+			ret = OSDP_PD_ERR_NONE;
+			break;
+		}
+		if (trs_ret == OSDP_TRS_DECODE_MODE_REPORT) {
+			/* mode-read (Table 39): reply with the current mode */
+			pd->reply_id = REPLY_XRD;
+			ret = OSDP_PD_ERR_NONE;
+			break;
+		}
+		/* OSDP_TRS_DECODE_TO_APP: mode-1 command; hand it to the app */
+		if (!do_command_callback(pd, &cmd)) {
+			ret = OSDP_PD_ERR_REPLY;
+			break;
+		}
+		/* Only consume the app's TRS answer; an older non-TRS event at
+		 * the queue head must ride out on a poll, not be eaten here. */
+		if (pd_event_peek(pd, &trs_event) == 0 &&
+		    trs_event->type == OSDP_EVENT_TRS) {
+			/* app answered synchronously: reply now (fast card) */
+			pd_event_dequeue(pd, &trs_event);
+			pd->active_event = trs_event;
+			pd->reply_id = REPLY_XRD;
+		} else {
+			/* app deferred: ACK ("working"). The R-APDU rides out as
+			 * a REPLY_XRD on a later poll once the app submits it. */
+			pd->reply_id = REPLY_ACK;
+		}
+		ret = OSDP_PD_ERR_NONE;
+		break;
+	}
 	case CMD_KEYSET:
 		if (len != CMD_KEYSET_DATA_LEN) {
 			break;
@@ -1124,7 +1180,7 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		}
 		ret = OSDP_PD_ERR_NONE;
 		pd->reply_id = REPLY_ACK;
-			memcpy(pd->keyset_pending, cmd.keyset.data, 16);
+		memcpy(pd->keyset_pending, cmd.keyset.data, 16);
 		break;
 	case CMD_CHLNG:
 		if (len != CMD_CHLNG_DATA_LEN) {
@@ -1231,6 +1287,20 @@ static int pd_build_reply(struct osdp_pd *pd, uint8_t *buf, int max_len)
 	switch (pd->reply_id) {
 	case REPLY_ACK:
 		/* ACK is just the reply ID byte; it carries no data */
+		ret = OSDP_PD_ERR_NONE;
+		break;
+	case REPLY_BUSY:
+		/**
+		 * BUSY is just the reply ID byte; it carries no data. Its
+		 * distinguishing framing (sequence 0, no SCB) is applied in
+		 * osdp_phy_packet_init().
+		 *
+		 * Nothing in this library selects REPLY_BUSY on the PD side
+		 * today, so this case is unreachable from libosdp itself; it
+		 * exists so that a PD which is told to report itself busy emits
+		 * a spec-conformant frame rather than falling into the BUG()
+		 * below.
+		 */
 		ret = OSDP_PD_ERR_NONE;
 		break;
 	case REPLY_PDID:
@@ -1394,7 +1464,8 @@ static int pd_build_reply(struct osdp_pd *pd, uint8_t *buf, int max_len)
 	case REPLY_MFGSTATR:
 	case REPLY_MFGERRR:
 		mfgstat = (event->type == OSDP_EVENT_MFGSTATR) ?
-			  &event->mfgstatr : &event->mfgerrr;
+				  &event->mfgstatr :
+				  &event->mfgerrr;
 		if (max_len < mfgstat->length) {
 			break;
 		}
@@ -1454,6 +1525,14 @@ static int pd_build_reply(struct osdp_pd *pd, uint8_t *buf, int max_len)
 		len += ret;
 		ret = OSDP_PD_ERR_NONE;
 		break;
+	case REPLY_XRD:
+		ret = osdp_trs_reply_build(pd, buf + len, max_len - len);
+		if (ret <= 0) {
+			break;
+		}
+		len += ret;
+		ret = OSDP_PD_ERR_NONE;
+		break;
 	case REPLY_CCRYPT:
 		if (smb == NULL) {
 			break;
@@ -1468,7 +1547,7 @@ static int pd_build_reply(struct osdp_pd *pd, uint8_t *buf, int max_len)
 		memcpy(buf + len + 8, pd->sc.pd_random, 8);
 		memcpy(buf + len + 16, pd->sc.pd_cryptogram, 16);
 		len += 32;
-		smb[0] = 3;      /* length */
+		smb[0] = 3; /* length */
 		smb[1] = SCS_12; /* type */
 		smb[2] = sc_use_scbkd(pd) ? 0 : 1;
 		ret = OSDP_PD_ERR_NONE;
@@ -1483,9 +1562,9 @@ static int pd_build_reply(struct osdp_pd *pd, uint8_t *buf, int max_len)
 		osdp_compute_rmac_i(pd);
 		memcpy(buf + len, pd->sc.r_mac, 16);
 		len += 16;
-		smb[0] = 3;       /* length */
-		smb[1] = SCS_14;  /* type */
-		smb[2] = 1;       /* CP auth succeeded */
+		smb[0] = 3; /* length */
+		smb[1] = SCS_14; /* type */
+		smb[2] = 1; /* CP auth succeeded */
 		sc_activate(pd);
 		notify_sc_status(pd);
 		pd->sc_tstamp = osdp_millis_now();
@@ -1496,7 +1575,8 @@ static int pd_build_reply(struct osdp_pd *pd, uint8_t *buf, int max_len)
 		}
 		ret = OSDP_PD_ERR_NONE;
 		break;
-	default: BUG();
+	default:
+		BUG();
 	}
 
 out:
@@ -1513,6 +1593,15 @@ out:
 		buf[1] = OSDP_PD_NAK_RECORD;
 		len = 2;
 		osdp_metrics_report(pd, OSDP_METRIC_NAK);
+		/* The reply this NAK replaces carried the app's event; the
+		 * event is not going out on this exchange and nothing
+		 * retries it, so hand it back as FAILED now -- letting it
+		 * ride to the send path would complete it OK. */
+		if (pd->active_event) {
+			pd_complete_event(pd, pd->active_event,
+					  OSDP_COMPLETION_FAILED);
+			pd->active_event = NULL;
+		}
 	}
 
 	/**
@@ -1624,6 +1713,13 @@ static int pd_receive_and_process_command(struct osdp_pd *pd)
 
 static inline void pd_error_reset(struct osdp_pd *pd)
 {
+	/* A dequeued event whose reply never reached the wire is not
+	 * retried by anyone; hand it back to the app as FAILED. */
+	if (pd->active_event) {
+		pd_complete_event(pd, pd->active_event,
+				  OSDP_COMPLETION_FAILED);
+		pd->active_event = NULL;
+	}
 	pd_sc_deactivate(pd);
 	osdp_phy_state_reset(pd, false);
 }
@@ -1838,6 +1934,7 @@ static int pd_setup_rx_storage(const struct osdp_channel *channel,
 
 osdp_t *osdp_pd_setup(struct osdp_channel *channel, const osdp_pd_info_t *info)
 {
+	struct osdp_pd_cap *cap;
 	struct osdp_pd *pd;
 	struct osdp *ctx;
 
@@ -1886,20 +1983,30 @@ osdp_t *osdp_pd_setup(struct osdp_channel *channel, const osdp_pd_info_t *info)
 	}
 
 	pd_collect_init_flags(pd, info->flags);
+	if (init_flags_conflict(info->flags)) {
+		LOG_ERR("ENFORCE_SECURE and INSTALL_MODE are mutually"
+			" exclusive");
+		goto error;
+	}
 
 	if (pd_event_queue_init(pd)) {
 		goto error;
 	}
 
-	if (info->scbk == NULL) {
-		if (is_enforce_secure(pd)) {
-			LOG_ERR("SCBK must be provided in ENFORCE_SECURE");
-			goto error;
-		}
-		LOG_WRN("SCBK not provided. PD is in INSTALL_MODE");
-		SET_FLAG(pd, PD_FLAG_INSTALL_MODE);
-	} else {
+	if (info->scbk) {
 		memcpy(pd->sc.scbk, info->scbk, 16);
+	} else if (is_enforce_secure(pd)) {
+		LOG_ERR("SCBK must be provided in ENFORCE_SECURE");
+		goto error;
+	} else if (!is_install_mode(pd)) {
+		/**
+		 * SCBK-D is a constant published in the spec, so a channel
+		 * keyed with it is secure against nobody. v2.2 D.8 allows it
+		 * only when the installer has explicitly enabled install mode;
+		 * a PD that was simply never keyed does not do OSDP-SC.
+		 */
+		LOG_WRN("SCBK not provided; secure channel is disabled");
+		SET_FLAG(pd, PD_FLAG_SC_DISABLED);
 	}
 	SET_FLAG(pd, PD_FLAG_SC_CAPABLE);
 	if (IS_ENABLED(OPT_OSDP_SKIP_MARK_BYTE)) {
@@ -1907,6 +2014,13 @@ osdp_t *osdp_pd_setup(struct osdp_channel *channel, const osdp_pd_info_t *info)
 	}
 	osdp_pd_set_attributes(pd, info->cap, &info->id);
 	osdp_pd_set_attributes(pd, osdp_pd_cap, NULL);
+	if (!sc_is_capable(pd)) {
+		/* Compliance level for this function code is a bitmap of
+		 * supported algorithms (v2.2 B.10); zero advertises none, so
+		 * the CP never starts a handshake this PD would only NAK. */
+		cap = &pd->cap[OSDP_PD_CAP_COMMUNICATION_SECURITY];
+		cap->compliance_level = 0;
+	}
 
 	SET_FLAG(pd, PD_FLAG_PD_MODE); /* used in checks in phy */
 
@@ -1927,12 +2041,15 @@ void osdp_pd_teardown(osdp_t *ctx)
 {
 	assert(ctx);
 	struct osdp *pd_ctx = TO_OSDP(ctx);
-	struct osdp_pd *pd = osdp_to_pd(ctx, 0);
-	const struct osdp_event *ev;
 
-	while (pd_event_dequeue(pd, &ev) == 0) {
-		pd_complete_event(pd, ev, OSDP_COMPLETION_ABORTED);
+	if (pd_ctx->tearing_down) {
+		return; /* re-entrant teardown from a completion */
 	}
+	pd_ctx->tearing_down = true;
+
+	struct osdp_pd *pd = osdp_to_pd(ctx, 0);
+
+	pd_drain_queue(pd, OSDP_COMPLETION_ABORTED);
 	pd_complete_event(pd, pd->active_event, OSDP_COMPLETION_ABORTED);
 	pd->active_event = NULL;
 
@@ -1941,6 +2058,10 @@ void osdp_pd_teardown(osdp_t *ctx)
 	}
 
 	osdp_fill_zeros(&pd->sc, sizeof(struct osdp_secure_channel));
+	/* A keyset that was decoded but whose ack never made it to the wire
+	 * leaves the new SCBK parked here. It shares storage with nak_code and
+	 * comset_pending, so wiping the key wipes the whole union. */
+	osdp_fill_zeros(pd->keyset_pending, sizeof(pd->keyset_pending));
 
 	if (pd_ctx->channel.close) {
 		pd_ctx->channel.close(pd_ctx->channel.data);
@@ -1968,6 +2089,7 @@ void osdp_pd_teardown(osdp_t *ctx)
 void osdp_pd_refresh(osdp_t *ctx)
 {
 	input_check(ctx);
+	input_check_not_tearing_down_noret(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
 	osdp_pd_update(pd);
@@ -1979,6 +2101,12 @@ void osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap)
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
 	osdp_pd_set_attributes(pd, cap, NULL);
+	/* Clearing the communication security capability is the documented way
+	 * to turn OSDP-SC off after setup. The reverse is not offered: a PD
+	 * that holds no SCBK has no secure channel to turn on. */
+	if (pd->cap[OSDP_PD_CAP_COMMUNICATION_SECURITY].compliance_level == 0) {
+		SET_FLAG(pd, PD_FLAG_SC_DISABLED);
+	}
 }
 
 void osdp_pd_set_command_callback(osdp_t *ctx, pd_command_callback_t cb,
@@ -2029,10 +2157,16 @@ static int pd_status_report_capacity(struct osdp_pd *pd,
 int osdp_pd_submit_event(osdp_t *ctx, const struct osdp_event *event)
 {
 	input_check(ctx);
+	input_check_not_tearing_down(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
-	if (event->type <= 0 ||
-	    event->type >= OSDP_EVENT_SENTINEL) {
+	if (!pd->event_completion_callback) {
+		LOG_ERR("Refusing event: no completion callback registered;"
+			" it is how event ownership returns to the app");
+		return -1;
+	}
+
+	if (event->type <= 0 || event->type >= OSDP_EVENT_SENTINEL) {
 		return -1;
 	}
 
@@ -2064,22 +2198,35 @@ int osdp_pd_submit_event(osdp_t *ctx, const struct osdp_event *event)
 	return pd_event_enqueue(pd, event);
 }
 
-int osdp_pd_notify_event(osdp_t *ctx, const struct osdp_event *event)
+/*
+ * Detach the queue, then drain the detached copy -- see cp_drain_queue() in
+ * osdp_cp.c for why the struct copy is a safe splice.
+ */
+static int pd_drain_queue(struct osdp_pd *pd,
+			  enum osdp_completion_status status)
 {
-	return osdp_pd_submit_event(ctx, event);
+	queue_t drain = pd->event_queue;
+	const struct osdp_event *ev;
+	queue_node_t *node;
+	int count = 0;
+
+	queue_init(&pd->event_queue);
+	while (queue_dequeue(&drain, &node) == 0) {
+		ev = CONTAINER_OF(node, struct osdp_event, _node);
+		pd_complete_event(pd, ev, status);
+		count++;
+	}
+	return count;
 }
 
 int osdp_pd_flush_events(osdp_t *ctx)
 {
 	input_check(ctx);
-	int count = 0;
-	const struct osdp_event *ev;
+	input_check_not_tearing_down(ctx);
+	int count;
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
-	while (pd_event_dequeue(pd, &ev) == 0) {
-		pd_complete_event(pd, ev, OSDP_COMPLETION_FLUSHED);
-		count++;
-	}
+	count = pd_drain_queue(pd, OSDP_COMPLETION_FLUSHED);
 
 	return count;
 }

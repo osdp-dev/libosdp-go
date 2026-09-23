@@ -13,6 +13,6 @@ package clib
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/include -I${SRCDIR}/src -I${SRCDIR}/src/crypto -I${SRCDIR}/utils/include
-#cgo CFLAGS: -DOPT_OSDP_PACKET_TRACE
+#cgo CFLAGS: -DOPT_OSDP_PACKET_TRACE -DOPT_BUILD_OSDP_TRS
 */
 import "C"

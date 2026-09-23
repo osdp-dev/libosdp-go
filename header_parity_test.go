@@ -23,9 +23,17 @@ var unboundByDesign = map[string]string{
 	"OSDP_LOG_MAX_LEVEL":     "enum bound marker, not a level",
 	"OSDP_PD_CAP_UNUSED":     "placeholder function code 0",
 	"OSDP_PD_ONLINE_TOUT_MS": "internal timing constant, documentation only",
-	"osdp_cp_send_command":   "deprecated alias of osdp_cp_submit_command",
-	"osdp_pd_notify_event":   "deprecated alias of osdp_pd_submit_event",
 	"osdp_logger_init":       "would replace the callback that routes logs to SetLogHandler",
+}
+
+// Transparent reader support (TRS) arrived with LibOSDP 4.0 and is bound by
+// its own change; until then its identifiers are exempt.
+func isTRS(name string) bool {
+	switch name {
+	case "OSDP_CMD_XWR", "OSDP_EVENT_TRS", "OSDP_NOTIFICATION_TRS_STATUS":
+		return true
+	}
+	return strings.HasPrefix(name, "OSDP_TRS_") || strings.HasPrefix(name, "osdp_cp_trs_")
 }
 
 var cComment = regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`)
@@ -74,7 +82,7 @@ func TestHeaderIsFullyBound(t *testing.T) {
 
 	var missing []string
 	for name := range declared {
-		if used[name] || strings.HasSuffix(name, "_SENTINEL") {
+		if used[name] || strings.HasSuffix(name, "_SENTINEL") || isTRS(name) {
 			continue
 		}
 		if _, ok := unboundByDesign[name]; ok {

@@ -28,18 +28,23 @@ struct osdp_bio {
 	 * engine-internal. Every reset path must go through bio_op_reset()
 	 * so the two cannot desync. */
 	enum osdp_bio_phase phase;
-	bool start_emitted;  /* one MP_START per transfer */
-	uint8_t reader;      /* fragment-0 metadata, cached for the final event */
+	bool start_emitted; /* one MP_START per transfer */
+	uint8_t reader; /* fragment-0 metadata, cached for the final event */
 	uint8_t status;
 	uint8_t type;
 	uint8_t quality;
-	tick_t tstamp;       /* last forward progress; bounds a stalled op */
+	tick_t tstamp; /* last forward progress; bounds a stalled op */
 	struct osdp_multipart mp;
 	uint8_t data[OSDP_EVENT_BIOREADR_MAX_TEMPLATE_LEN]; /* template staging */
 };
 
 bool osdp_bio_is_active(struct osdp_pd *pd);
+/* True while a bio operation owns the app command that started it -- i.e. a
+ * multipart BIOREADR still being reassembled. Mirrors osdp_piv_owns_cmd(). */
+bool osdp_bio_owns_cmd(struct osdp_pd *pd, int cmd_id);
 void osdp_bio_abort(struct osdp_pd *pd);
+/* Ask the running reassembly to stop; -1 if none is running. */
+int osdp_bio_request_cancel(struct osdp_pd *pd);
 
 /* --- PD role --- */
 bool osdp_bio_pd_reply_pending(struct osdp_pd *pd);

@@ -72,15 +72,6 @@ func (e EventNotification) GetType() OsdpEventType { return EvtNotification }
 // type corresponds to EventNotification.Type.
 type NotificationData interface{ isNotification() }
 
-// NotificationCommand is the payload of a NotificationTypeCommand notification:
-// an application command reached a terminal state.
-type NotificationCommand struct {
-	Command OsdpCommandType
-	Success bool
-}
-
-func (NotificationCommand) isNotification() {}
-
 // NotificationSCStatus is the payload of a NotificationTypeSCStatus
 // notification: the secure channel session state changed.
 type NotificationSCStatus struct {
@@ -406,10 +397,6 @@ func decodeNotification(n *C.struct_osdp_notification) (NotificationType, Notifi
 	nt := NotificationType(C.get_notification_type(n))
 	var payload NotificationData
 	switch nt {
-	case NotificationTypeCommand:
-		var command, success C.int
-		C.get_notification_command(n, &command, &success)
-		payload = NotificationCommand{Command: OsdpCommandType(command), Success: success != 0}
 	case NotificationTypeSCStatus:
 		var active, scbkD C.int
 		C.get_notification_sc_status(n, &active, &scbkD)

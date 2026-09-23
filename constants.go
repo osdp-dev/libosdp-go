@@ -195,7 +195,6 @@ const (
 type NotificationType int
 
 const (
-	NotificationTypeCommand    NotificationType = C.OSDP_NOTIFICATION_COMMAND
 	NotificationTypeSCStatus   NotificationType = C.OSDP_NOTIFICATION_SC_STATUS
 	NotificationTypePDStatus   NotificationType = C.OSDP_NOTIFICATION_PD_STATUS
 	NotificationTypeMPStart    NotificationType = C.OSDP_NOTIFICATION_MP_START
@@ -245,10 +244,6 @@ const (
 	NakBioFmt     NakCode = C.OSDP_PD_NAK_BIO_FMT
 	NakRecord     NakCode = C.OSDP_PD_NAK_RECORD
 )
-
-// CmdFileTxFlagCancel cancels an in-progress file transfer when set in
-// CommandFileTx.Flags.
-const CmdFileTxFlagCancel uint32 = C.OSDP_CMD_FILE_TX_FLAG_CANCEL
 
 // CmdFlagBroadcast marks a command for broadcast to all PDs (Command.Flags).
 const CmdFlagBroadcast uint32 = C.OSDP_CMD_FLAG_BROADCAST

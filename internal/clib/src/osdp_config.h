@@ -11,108 +11,17 @@
  * @brief The following macros are defined defined from the variable in cmake
  * files. All @XXX@ are replaced by the value of XXX as resolved by cmake.
  */
-#define PROJECT_VERSION                "3.2.0"
+#define PROJECT_VERSION                "4.0.0"
+/* Human-visible version. Equals PROJECT_VERSION when released; carries the
+ * pre-release marker and git position (e.g. "4.0.0-dev.37+ga1b2c3d") while a
+ * release cycle is prepared but unpublished. This is what osdp_get_version()
+ * returns. */
+#define LIBOSDP_VERSION_STR            "4.0.0-dev.337+g50c6824"
 #define PROJECT_NAME                   "libosdp"
-#define GIT_BRANCH                     "HEAD"
-#define GIT_REV                        "v3.2.0-250-g27e7b61"
-#define GIT_TAG                        "v3.2.0"
+#define GIT_BRANCH                     "detached"
+#define GIT_REV                        "v3.2.0-337-g50c6824"
+#define GIT_TAG                        ""
 #define GIT_DIFF                       ""
 #define REPO_ROOT                      "/home/sidcha/work/osdp/libosdp-go/libosdp"
-
-/**
- * @brief OSDP configuration parameters
- *
- * These values can be overridden by build system (Kconfig for Zephyr,
- * CMake options for other platforms). The values below are defaults
- * used when not overridden.
- */
-
-/* Protocol Timings */
-#ifndef OSDP_PD_SC_RETRY_MS
-#define OSDP_PD_SC_RETRY_MS                     (600 * 1000u)
-#endif
-
-#ifndef OSDP_PD_POLL_TIMEOUT_MS
-#define OSDP_PD_POLL_TIMEOUT_MS                 (50)
-#endif
-
-#ifndef OSDP_PD_SC_TIMEOUT_MS
-#define OSDP_PD_SC_TIMEOUT_MS                   (8 * 1000u)
-#endif
-
-#ifndef OSDP_PD_ONLINE_TOUT_MS
-#define OSDP_PD_ONLINE_TOUT_MS                  (8 * 1000u)
-#endif
-
-#ifndef OSDP_RESP_TOUT_MS
-#define OSDP_RESP_TOUT_MS                       (200)
-#endif
-
-#ifndef OSDP_CMD_RETRY_WAIT_MS
-#define OSDP_CMD_RETRY_WAIT_MS                  (800)
-#endif
-
-#ifndef OSDP_ONLINE_RETRY_WAIT_MAX_MS
-#define OSDP_ONLINE_RETRY_WAIT_MAX_MS           (300 * 1000u)
-#endif
-
-/* Protocol Limits */
-#ifndef OSDP_CMD_MAX_RETRIES
-#define OSDP_CMD_MAX_RETRIES                    (8)
-#endif
-
-#ifndef OSDP_FILE_ERROR_RETRY_MAX
-#define OSDP_FILE_ERROR_RETRY_MAX               (10)
-#endif
-
-/* A smartcard/PIV multi-part operation that makes no forward progress for
- * this long is aborted (covers a PD app that never supplies its reply). */
-#ifndef OSDP_PIV_OP_TIMEOUT_MS
-#define OSDP_PIV_OP_TIMEOUT_MS                  (10 * 1000)
-#endif
-
-/* A multi-part biometric read reply that makes no forward progress for this
- * long is aborted (covers a PD app that never supplies its template). */
-#ifndef OSDP_BIO_OP_TIMEOUT_MS
-#define OSDP_BIO_OP_TIMEOUT_MS                  (10 * 1000)
-#endif
-
-#ifndef OSDP_PD_MAX
-#define OSDP_PD_MAX                             (126)
-#endif
-
-#ifndef OSDP_PD_NAME_MAXLEN
-#define OSDP_PD_NAME_MAXLEN                     (16)
-#endif
-
-/* Memory Configuration */
-#ifndef OSDP_PACKET_BUF_SIZE
-#define OSDP_PACKET_BUF_SIZE                    (256)
-#endif
-
-#ifndef OSDP_MINIMUM_PACKET_SIZE
-#define OSDP_MINIMUM_PACKET_SIZE                (128)
-#endif
-
-#ifndef OSDP_RX_RB_SIZE
-#define OSDP_RX_RB_SIZE                         (512)
-#endif
-
-#ifndef OSDP_CP_CMD_POOL_SIZE
-#define OSDP_CP_CMD_POOL_SIZE                   (4)
-#endif
-
-#ifndef OSDP_CP_MAX_PDS
-#define OSDP_CP_MAX_PDS                         (8)
-#endif
-
-/* Internal Constants */
-#ifndef OSDP_CMD_ID_OFFSET
-#define OSDP_CMD_ID_OFFSET                      (5)
-#endif
-
-#ifndef OSDP_PCAP_LINK_TYPE
-#define OSDP_PCAP_LINK_TYPE                     (162)
-#endif
 
 #endif /* _OSDP_CONFIG_H_ */

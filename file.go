@@ -68,7 +68,8 @@ func (cp *ControlPanel) RegisterFileOperations(pdNumber int, fileOps FileOperati
 	fileOpsMu.Unlock()
 
 	// libosdp copies the ops struct, so it only needs to outlive the call.
-	cFileOps := (*C.struct_osdp_file_ops)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
+	// calloc leaves optional ops this binding does not set (finalize) NULL.
+	cFileOps := (*C.struct_osdp_file_ops)(C.calloc(1, C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
 	defer C.free(unsafe.Pointer(cFileOps))
 	cFileOps.arg = handlePtr(handle)
 	cFileOps.open = (*[0]byte)(C.fileOpenWrapper)
@@ -103,7 +104,8 @@ func (pd *PeripheralDevice) RegisterFileOperations(fileOps FileOperations) error
 	fileOpsMu.Unlock()
 
 	// libosdp copies the ops struct, so it only needs to outlive the call.
-	cFileOps := (*C.struct_osdp_file_ops)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
+	// calloc leaves optional ops this binding does not set (finalize) NULL.
+	cFileOps := (*C.struct_osdp_file_ops)(C.calloc(1, C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
 	defer C.free(unsafe.Pointer(cFileOps))
 	cFileOps.arg = handlePtr(handle)
 	cFileOps.open = (*[0]byte)(C.fileOpenWrapper)

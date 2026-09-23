@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <inttypes.h>
 #include <stdlib.h>
 
 #include "osdp_bio.h"
@@ -38,7 +39,7 @@ static struct osdp_bio *bio_get(struct osdp_pd *pd)
 			memset(pd->bio, 0, sizeof(struct osdp_bio));
 		}
 #else
-		pd->bio = calloc(1, sizeof(struct osdp_bio));
+		pd->bio = osdp_calloc(1, sizeof(struct osdp_bio));
 #endif
 		if (pd->bio == NULL) {
 			LOG_ERR("BIO: failed to allocate context");
@@ -78,6 +79,25 @@ static void bio_op_open(struct osdp_pd *pd, struct osdp_bio *b, uint8_t reader)
 bool osdp_bio_is_active(struct osdp_pd *pd)
 {
 	return TO_BIO(pd) && TO_BIO(pd)->phase != OSDP_BIO_IDLE;
+}
+
+bool osdp_bio_owns_cmd(struct osdp_pd *pd, int cmd_id)
+{
+	/* CMD_BIOREAD is the only wire command whose reply this engine
+	 * reassembles; REPLY_BIOMATCHR is always single-part. */
+	return osdp_bio_is_active(pd) && cmd_id == CMD_BIOREAD;
+}
+
+int osdp_bio_request_cancel(struct osdp_pd *pd)
+{
+	struct osdp_bio *b = TO_BIO(pd);
+
+	if (!osdp_bio_is_active(pd)) {
+		return -1;
+	}
+	/* Consumed by osdp_bio_cp_get_command(), which also sends CMD_ABORT. */
+	osdp_mp_request_cancel(&b->mp);
+	return 0;
 }
 
 void osdp_bio_abort(struct osdp_pd *pd)
@@ -199,8 +219,11 @@ int osdp_bio_cp_get_command(struct osdp_pd *pd)
 	if (!b || b->phase == OSDP_BIO_IDLE) {
 		return 0;
 	}
-	if (osdp_millis_since(b->tstamp) > OSDP_BIO_OP_TIMEOUT_MS) {
-		LOG_ERR("BIO: operation timed out; aborting");
+	if (osdp_mp_cancel_requested(&b->mp) ||
+	    osdp_millis_since(b->tstamp) > OSDP_BIO_OP_TIMEOUT_MS) {
+		LOG_ERR("BIO: operation %s; aborting",
+			osdp_mp_cancel_requested(&b->mp) ? "cancelled" :
+							   "timed out");
 		osdp_bio_abort(pd);
 		return CMD_ABORT;
 	}
@@ -249,7 +272,8 @@ int osdp_bio_cp_reply_consume(struct osdp_pd *pd, const uint8_t *buf, int len,
 		total = bread_u16_le(buf, &pos);
 		chunk = len - REPLY_BIOREADR_DATA_LEN;
 		if (total > sizeof(b->data) || chunk > (int)total) {
-			LOG_ERR("BIO: bad first fragment (total %u, got %d)",
+			LOG_ERR("BIO: bad first fragment (total %" PRIu32
+				", got %d)",
 				total, chunk);
 			return -1;
 		}

@@ -39,8 +39,16 @@ struct osdp_file {
 	struct osdp_multipart mp; /* owns state/offset/total/codec/abort/wait */
 	bool is_open;
 	bool keep_alive_pending; /* PD: last frame was a zero-length ping */
+	tick_t finalize_tstamp; /* PD: when finalize first said "not yet" */
 	int errors;
-	bool cancel_req;
+	/*
+	 * Set while file_transition_done() runs, which includes the completion
+	 * callback it fires. The engine is already at OSDP_MP_DONE by then, so
+	 * the "a transfer is active" guard no longer holds and a transfer
+	 * started from that callback would be wiped by the file_state_reset()
+	 * still to come. This latch refuses it instead.
+	 */
+	bool in_terminal;
 	struct osdp_file_ops ops;
 };
 
@@ -57,6 +65,8 @@ int osdp_file_cmd_stat_decode(struct osdp_pd *pd, uint8_t *buf, int len);
 int osdp_file_cmd_stat_build(struct osdp_pd *pd, uint8_t *buf, int max_len);
 int osdp_file_tx_command(struct osdp_pd *pd, int file_id, uint32_t flags);
 int osdp_file_tx_get_command(struct osdp_pd *pd);
+/* Ask a running transfer to stop; -1 if none is running. */
+int osdp_file_tx_request_cancel(struct osdp_pd *pd);
 void osdp_file_tx_abort(struct osdp_pd *pd);
 
 #endif /* _OSDP_FILE_H_ */

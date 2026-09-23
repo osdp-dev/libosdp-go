@@ -30,7 +30,8 @@ import (
 
 // cSources are compiled by cgo and therefore copied (flattened) into the
 // package directory. This mirrors the set the Python wheel vendors, with
-// OPT_OSDP_PACKET_TRACE enabled (hence osdp_diag.c + pcap_gen.c).
+// OPT_OSDP_PACKET_TRACE enabled (hence osdp_diag.c + pcap_gen.c), plus
+// osdp_trs.c for OPT_BUILD_OSDP_TRS (set in internal/clib/clib.go).
 var cSources = []string{
 	"src/osdp_common.c",
 	"src/osdp_phy.c",
@@ -43,6 +44,7 @@ var cSources = []string{
 	"src/osdp_diag.c",
 	"src/osdp_bio.c",
 	"src/osdp_piv.c",
+	"src/osdp_trs.c",
 	"src/crypto/tinyaes_src.c",
 	"src/crypto/tinyaes.c",
 	"utils/src/list.c",
@@ -160,14 +162,27 @@ func genConfig(tmpl, dst, repoRoot string) {
 	raw, err := os.ReadFile(tmpl)
 	must(err)
 
+	version, prerelease := cmakeProjectVersion(repoRoot)
+	rev := git(repoRoot, "describe", "--tags", "--long", "--always", "--abbrev=7")
+	tag := git(repoRoot, "describe", "--exact-match", "--tags", "HEAD")
+	dirty := gitDiffMarker(repoRoot)
+	if tag != "" {
+		tag += dirty
+	}
+	branch := git(repoRoot, "symbolic-ref", "--short", "-q", "HEAD")
+	if branch == "" {
+		branch = "detached"
+	}
+
 	repl := map[string]string{
-		"PROJECT_VERSION": projectVersion(repoRoot),
-		"PROJECT_NAME":    projectName,
-		"GIT_BRANCH":      git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"),
-		"GIT_REV":         git(repoRoot, "describe", "--tags", "--long", "--always", "--abbrev=7"),
-		"GIT_TAG":         git(repoRoot, "describe", "--tags", "--abbrev=0"),
-		"GIT_DIFF":        gitDiffMarker(repoRoot),
-		"REPO_ROOT":       repoRoot,
+		"PROJECT_VERSION":     version,
+		"LIBOSDP_VERSION_STR": versionString(version, prerelease, rev, tag),
+		"PROJECT_NAME":        projectName,
+		"GIT_BRANCH":          branch,
+		"GIT_REV":             rev,
+		"GIT_TAG":             tag,
+		"GIT_DIFF":            dirty,
+		"REPO_ROOT":           repoRoot,
 	}
 
 	out := regexp.MustCompile(`@(\w+)@`).ReplaceAllStringFunc(string(raw), func(m string) string {
@@ -183,13 +198,47 @@ func genConfig(tmpl, dst, repoRoot string) {
 
 // projectVersion derives the X.Y.Z version from the latest git tag, falling
 // back to the version compiled into the build if git is unavailable.
-func projectVersion(repoRoot string) string {
-	tag := git(repoRoot, "describe", "--tags", "--abbrev=0")
-	tag = strings.TrimPrefix(tag, "v")
-	if tag == "" {
-		return "0.0.0"
+// cmakeProjectVersion reads the numeric version from upstream's project() call
+// and the LIBOSDP_PRERELEASE marker ("" once released) from CMakeLists.txt.
+func cmakeProjectVersion(repoRoot string) (version, prerelease string) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "CMakeLists.txt"))
+	must(err)
+	m := regexp.MustCompile(`project\(libosdp VERSION ([0-9.]+)\)`).FindSubmatch(raw)
+	if m == nil {
+		must(fmt.Errorf("no project(libosdp VERSION ...) in CMakeLists.txt"))
 	}
-	return tag
+	version = string(m[1])
+	if p := regexp.MustCompile(`set\(LIBOSDP_PRERELEASE "([^"]*)"\)`).FindSubmatch(raw); p != nil {
+		prerelease = string(p[1])
+	}
+	return version, prerelease
+}
+
+// versionString mirrors LIBOSDP_VERSION_STR in upstream's cmake/GitInfo.cmake:
+// a pre-release, or any build not sitting on a release tag, carries its git
+// position so it cannot be mistaken for the release.
+func versionString(version, prerelease, rev, tag string) string {
+	pos := regexp.MustCompile(`-([0-9]+)-g([0-9a-f]+)$`).FindStringSubmatch(rev)
+	if prerelease == "" {
+		if tag != "" {
+			return version
+		}
+		if pos != nil {
+			return version + "+" + pos[1] + ".g" + pos[2]
+		}
+		if rev != "" {
+			return version + "+g" + rev
+		}
+		return version
+	}
+	s := version + "-" + prerelease
+	if pos != nil {
+		return s + "." + pos[1] + "+g" + pos[2]
+	}
+	if rev != "" {
+		return s + "+g" + rev
+	}
+	return s
 }
 
 func gitDiffMarker(repoRoot string) string {

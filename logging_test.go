@@ -46,7 +46,7 @@ func newPDLoggingAt(t *testing.T, level osdp.LogLevel) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ch.Close() })
-	info := testPdInfo(osdp.FlagInstallMode)
+	info := testPdInfo(0) // no SCBK and no install mode: libosdp warns
 	info.Address = 7
 	pd, err := osdp.NewPeripheralDevice(ch, info, nil, level)
 	if err != nil {
@@ -55,21 +55,21 @@ func newPDLoggingAt(t *testing.T, level osdp.LogLevel) {
 	t.Cleanup(pd.Stop)
 }
 
-const installModeWarning = "INSTALL_MODE"
+const noSCBKWarning = "secure channel is disabled"
 
 func TestLogHandlerSetBeforeSetupReceivesPDLogs(t *testing.T) {
 	logs := captureLogs(t)
-	newPDLoggingAt(t, osdp.LogInfo) // warns that no SCBK was given
+	newPDLoggingAt(t, osdp.LogInfo)
 
 	for _, r := range logs() {
-		if strings.Contains(r.msg, installModeWarning) {
+		if strings.Contains(r.msg, noSCBKWarning) {
 			if r.pd != 7 || r.level != osdp.LogWarning {
 				t.Errorf("got pd=%d level=%v, want pd=7 level=WARN", r.pd, r.level)
 			}
 			return
 		}
 	}
-	t.Fatalf("handler never saw the PD's install-mode warning; got %+v", logs())
+	t.Fatalf("handler never saw the PD's missing-SCBK warning; got %+v", logs())
 }
 
 func TestSetupLogLevelFiltersHandler(t *testing.T) {

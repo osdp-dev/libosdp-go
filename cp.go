@@ -313,6 +313,28 @@ func (cp *ControlPanel) FlushCommands(pdNumber int) (int, error) {
 	return int(count), nil
 }
 
+// Cancel asks the running multipart operation of kind what (file transfer,
+// PIV, GENAUTH, CRAUTH or multipart BIOREAD) on a PD to stop. It is
+// cooperative: the operation ends on a later refresh and its command then
+// completes with CompletionFailed, with MPOutcomeAborted on the MP_DONE
+// notification. It errors if no such operation is running.
+func (cp *ControlPanel) Cancel(pdNumber int, what MPMsgType) error {
+	if pdNumber < 0 || pdNumber >= len(cp.pdInfoList) {
+		return fmt.Errorf("invalid PD number: %d", pdNumber)
+	}
+
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+
+	if cp.ctx == nil {
+		return fmt.Errorf("control panel context is not initialized")
+	}
+	if C.osdp_cp_cancel(unsafe.Pointer(cp.ctx), C.int(pdNumber), C.enum_osdp_mp_msg_type(what)) != 0 {
+		return fmt.Errorf("no %v operation in progress on PD %d", what, pdNumber)
+	}
+	return nil
+}
+
 // GetPDID retrieves PD ID information as reported by the PD
 func (cp *ControlPanel) GetPDID(pdNumber int) (*PdId, error) {
 	if pdNumber < 0 || pdNumber >= len(cp.pdInfoList) {

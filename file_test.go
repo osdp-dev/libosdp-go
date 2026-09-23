@@ -132,3 +132,59 @@ func TestFileTransferStatusReportsProgress(t *testing.T) {
 	}
 	t.Fatal("never observed an in-progress transfer on both ends")
 }
+
+func TestCancelAbortsFileTransfer(t *testing.T) {
+	link := newFIFOLink(t)
+	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
+	pd.RegisterFileOperations(newMemFile(1, nil))
+	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode|osdp.FlagEnableNotification))
+	cp.RegisterFileOperations(0, newMemFile(1, make([]byte, 1<<20)))
+
+	outcome := make(chan osdp.MPOutcome, 1)
+	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
+		if n, ok := ev.Event.(osdp.EventNotification); ok && n.Type == osdp.NotificationTypeMPDone {
+			outcome <- n.Payload.(osdp.NotificationMP).Outcome
+		}
+		return 0
+	})
+	completed := make(chan osdp.CompletionStatus, 1)
+	cp.SetCommandCompletionHandler(func(_ int, cmd *osdp.Command, st osdp.CompletionStatus) {
+		if cmd.Command.GetType() == osdp.CmdFileTx {
+			completed <- st
+		}
+	})
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online")
+	}
+
+	if err := cp.Cancel(0, osdp.MPMsgFileTransfer); err == nil {
+		t.Fatal("Cancel succeeded with no transfer running")
+	}
+	cp.SubmitCommand(0, &osdp.Command{Command: osdp.CommandFileTx{ID: 1}})
+	for {
+		if st, err := cp.GetFileTransferStatus(0); err == nil && st.Offset > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := cp.Cancel(0, osdp.MPMsgFileTransfer); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	select {
+	case st := <-completed:
+		if st != osdp.CompletionFailed {
+			t.Errorf("FileTx completed %v, want CompletionFailed", st)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled transfer never completed")
+	}
+	select {
+	case o := <-outcome:
+		if o != osdp.MPOutcomeAborted {
+			t.Errorf("MP_DONE outcome %v, want MPOutcomeAborted", o)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no MP_DONE notification")
+	}
+}
