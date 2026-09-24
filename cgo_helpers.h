@@ -29,6 +29,7 @@ extern int fileOpenWrapper(void *arg, int file_id, uint32_t *size);
 extern int fileReadWrapper(void *arg, void *buf, uint32_t size, uint32_t offset);
 extern int fileWriteWrapper(void *arg, void *buf, uint32_t size, uint32_t offset);
 extern int fileCloseWrapper(void *arg);
+extern _Bool fileFinalizeWrapper(void *arg, enum osdp_mp_outcome *outcome, uint16_t *delay_ms);
 
 // uintptr_to_ptr fabricates an opaque void* from an integer registry handle.
 // Handles are passed through libosdp's void* callback args and never

@@ -188,3 +188,69 @@ func TestCancelAbortsFileTransfer(t *testing.T) {
 		t.Fatal("no MP_DONE notification")
 	}
 }
+
+// finalizingFile is a PD-side memFile that takes pending polls to "install"
+// what it received, then reports outcome.
+type finalizingFile struct {
+	*memFile
+	pending int
+	outcome osdp.MPOutcome
+	calls   int
+}
+
+func (f *finalizingFile) Finalize() (bool, osdp.MPOutcome, time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.calls <= f.pending {
+		return false, 0, 20 * time.Millisecond
+	}
+	return true, f.outcome, 0
+}
+
+func transferWithFinalizer(t *testing.T, rx *finalizingFile) osdp.CompletionStatus {
+	t.Helper()
+	link := newFIFOLink(t)
+	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
+	if err := pd.RegisterFileOperations(rx); err != nil {
+		t.Fatalf("PD RegisterFileOperations: %v", err)
+	}
+	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode))
+	cp.RegisterFileOperations(0, newMemFile(1, make([]byte, 500)))
+	completed := make(chan osdp.CompletionStatus, 1)
+	cp.SetCommandCompletionHandler(func(_ int, cmd *osdp.Command, st osdp.CompletionStatus) {
+		if cmd.Command.GetType() == osdp.CmdFileTx {
+			completed <- st
+		}
+	})
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online")
+	}
+	cp.SubmitCommand(0, &osdp.Command{Command: osdp.CommandFileTx{ID: 1}})
+	select {
+	case st := <-completed:
+		return st
+	case <-time.After(15 * time.Second):
+		t.Fatal("transfer never completed")
+	}
+	return 0
+}
+
+func TestFileFinalizerHoldsTransferOpenUntilDone(t *testing.T) {
+	rx := &finalizingFile{memFile: newMemFile(1, nil), pending: 3, outcome: osdp.MPOutcomeOK}
+	if st := transferWithFinalizer(t, rx); st != osdp.CompletionOK {
+		t.Fatalf("transfer completed %v, want CompletionOK", st)
+	}
+	rx.mu.Lock()
+	defer rx.mu.Unlock()
+	if rx.calls != rx.pending+1 {
+		t.Errorf("Finalize called %d times, want %d", rx.calls, rx.pending+1)
+	}
+}
+
+func TestFileFinalizerCanRejectTheFile(t *testing.T) {
+	rx := &finalizingFile{memFile: newMemFile(1, nil), outcome: osdp.MPOutcomeInvalid}
+	if st := transferWithFinalizer(t, rx); st != osdp.CompletionFailed {
+		t.Fatalf("transfer completed %v, want CompletionFailed", st)
+	}
+}

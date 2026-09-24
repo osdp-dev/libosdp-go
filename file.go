@@ -13,6 +13,7 @@ import "C"
 import (
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -27,6 +28,22 @@ type FileOperations interface {
 	Write(buffer []byte, size int, offset int) (bytesWritten int, err error)
 	// Close closes the currently open file
 	Close() error
+}
+
+// FileFinalizer is an optional extension of FileOperations for a PD. Once the
+// last byte of a file has arrived, Finalize is called, and called again on each
+// CP poll for as long as it reports done=false; meanwhile the transfer stays
+// open, so the application can verify or install what it received. retryIn
+// hints how long the CP should wait before asking again. When done, outcome is
+// the transfer's result: anything but MPOutcomeOK fails it on the CP.
+//
+// Finalize runs inside the PD's refresh loop and must return promptly; do slow
+// work on another goroutine and only report progress here. A CP that missed a
+// status reply may resend its last chunk while finalizing, so Write must still
+// tolerate calls in that window. Without this interface a received file is
+// final as soon as its last byte is written.
+type FileFinalizer interface {
+	Finalize() (done bool, outcome MPOutcome, retryIn time.Duration)
 }
 
 // FileTransferStatus represents the current status of a file transfer
@@ -112,6 +129,9 @@ func (pd *PeripheralDevice) RegisterFileOperations(fileOps FileOperations) error
 	cFileOps.read = (*[0]byte)(C.fileReadWrapper)
 	cFileOps.write = (*[0]byte)(C.fileWriteWrapper)
 	cFileOps.close = (*[0]byte)(C.fileCloseWrapper)
+	if _, ok := fileOps.(FileFinalizer); ok {
+		cFileOps.finalize = (*[0]byte)(C.fileFinalizeWrapper)
+	}
 
 	ret := C.osdp_file_register_ops(unsafe.Pointer(pd.ctx), 0, cFileOps)
 	if ret != 0 {
@@ -237,4 +257,24 @@ func fileCloseWrapper(arg unsafe.Pointer) C.int {
 	}
 
 	return C.int(0)
+}
+
+//export fileFinalizeWrapper
+func fileFinalizeWrapper(arg unsafe.Pointer, outcome *C.enum_osdp_mp_outcome, delayMs *C.uint16_t) C.bool {
+	fileOps, ok := fileOpsLookup(uintptr(arg))
+	if !ok {
+		*outcome = C.OSDP_MP_OUTCOME_ABORTED
+		return true
+	}
+	done, result, retryIn := fileOps.(FileFinalizer).Finalize()
+	if !done {
+		ms := retryIn.Milliseconds()
+		if ms > 0xFFFF {
+			ms = 0xFFFF
+		}
+		*delayMs = C.uint16_t(ms)
+		return false
+	}
+	*outcome = C.enum_osdp_mp_outcome(result)
+	return true
 }
