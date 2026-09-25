@@ -7,6 +7,8 @@
 package osdp_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -119,5 +121,37 @@ func TestAddPDAppendsAddressablePD(t *testing.T) {
 	}
 	if _, err := cp.IsPDEnabled(2); err == nil {
 		t.Error("IsPDEnabled(2) accepted an index past the added PD")
+	}
+}
+
+func TestCapturePacketsWritesPcapOnStop(t *testing.T) {
+	// libosdp writes captures to the working directory. (t.Chdir needs Go
+	// 1.24; go.mod supports 1.21.)
+	wd, _ := os.Getwd()
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	link := newFIFOLink(t)
+	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode|osdp.FlagCapturePackets), nil)
+	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode|osdp.FlagCapturePackets))
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online")
+	}
+	cp.Stop()
+	pd.Stop()
+
+	for _, pattern := range []string{"osdp-trace-cp-pd-1-*.pcap", "osdp-trace-pd-1-*.pcap"} {
+		files, _ := filepath.Glob(pattern)
+		if len(files) != 1 {
+			t.Fatalf("captures matching %s: %v, want one", pattern, files)
+		}
+		st, err := os.Stat(files[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Size() <= 24 { // pcap global header only
+			t.Errorf("%s has no packets (%d bytes)", files[0], st.Size())
+		}
 	}
 }

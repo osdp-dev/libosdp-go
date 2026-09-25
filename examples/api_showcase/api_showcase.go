@@ -108,7 +108,7 @@ func runShowcase(channel *osdp.FIFOChannel, demo *DemoState) {
 	pdInfo := &osdp.PdInfo{
 		Address:  1,
 		BaudRate: 115200,
-		Flags:    osdp.FlagInstallMode | osdp.FlagEnableNotification,
+		Flags:    osdp.FlagInstallMode | osdp.FlagEnableNotification | osdp.FlagCapturePackets,
 		SCBK:     []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10}, // Secure Channel Base Key
 		ID: osdp.PdId{
 			Version:       1,
@@ -507,9 +507,9 @@ func testCapabilityQueries(cp *osdp.ControlPanel) {
 }
 
 func testFlagModification(cp *osdp.ControlPanel) {
+	// FlagCapturePackets is setup-only, so it is set in pdInfo instead.
 	flags := []osdp.OsdpFlag{
 		osdp.FlagEnableNotification,
-		osdp.FlagCapturePackets,
 	}
 
 	for _, flag := range flags {

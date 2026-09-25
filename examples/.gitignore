@@ -17,3 +17,6 @@ secure_channel/secure_channel
 # Go dependency files
 go.sum
 */go.sum
+
+# Packet captures (FlagCapturePackets)
+*.pcap

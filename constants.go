@@ -15,10 +15,14 @@ import "C"
 type OsdpFlag int
 
 const (
-	FlagEnforceSecure                OsdpFlag = C.OSDP_FLAG_ENFORCE_SECURE
-	FlagInstallMode                  OsdpFlag = C.OSDP_FLAG_INSTALL_MODE
-	FlagIgnoreUnsolicited            OsdpFlag = C.OSDP_FLAG_IGN_UNSOLICITED
-	FlagEnableNotification           OsdpFlag = C.OSDP_FLAG_ENABLE_NOTIFICATION
+	FlagEnforceSecure      OsdpFlag = C.OSDP_FLAG_ENFORCE_SECURE
+	FlagInstallMode        OsdpFlag = C.OSDP_FLAG_INSTALL_MODE
+	FlagIgnoreUnsolicited  OsdpFlag = C.OSDP_FLAG_IGN_UNSOLICITED
+	FlagEnableNotification OsdpFlag = C.OSDP_FLAG_ENABLE_NOTIFICATION
+	// FlagCapturePackets records every packet the CP or PD sees to
+	// osdp-trace-[cp-]pd-<address>-<time>.pcap in the working directory.
+	// It can only be set at setup, and the file is complete once Stop
+	// returns.
 	FlagCapturePackets               OsdpFlag = C.OSDP_FLAG_CAPTURE_PACKETS
 	FlagAllowEmptyEncryptedDataBlock OsdpFlag = C.OSDP_FLAG_ALLOW_EMPTY_ENCRYPTED_DATA_BLOCK
 	FlagBioReadRMultipart            OsdpFlag = C.OSDP_FLAG_BIOREADR_MULTIPART
