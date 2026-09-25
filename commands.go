@@ -177,6 +177,11 @@ func commandToC(cmd *Command) (*C.struct_osdp_cmd, error) {
 	cCmd.flags = C.uint32_t(cmd.Flags)
 
 	switch cmdData := cmd.Command.(type) {
+	case CommandTRS:
+		if err := encodeTRSCommand(C.cmd_trs(cCmd), cmdData); err != nil {
+			C.free(unsafe.Pointer(cCmd))
+			return nil, err
+		}
 	case CommandNotification, CommandComsetDone:
 		C.free(unsafe.Pointer(cCmd))
 		return nil, fmt.Errorf("osdp: %T is synthesized by libosdp and cannot be submitted", cmdData)
@@ -418,6 +423,8 @@ func decodeCommand(cCmd *C.struct_osdp_cmd) *Command {
 		buf := make([]C.uint8_t, C.OSDP_PIV_DATA_MAX_LEN)
 		C.get_cmd_auth(cCmd, &algorithm, &key, &length, &buf[0])
 		commandData = CommandCRAuth{Algorithm: uint8(algorithm), Key: uint8(key), Data: C.GoBytes(unsafe.Pointer(&buf[0]), C.int(length))}
+	case CmdXWR:
+		commandData = decodeTRSCommand(C.cmd_trs(cCmd))
 	case CmdNotification:
 		nt, payload := decodeNotification(C.cmd_notif(cCmd))
 		commandData = CommandNotification{Type: nt, Payload: payload}

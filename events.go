@@ -144,6 +144,11 @@ func eventToC(event *Event) (*C.struct_osdp_event, error) {
 	cEvent._type = C.enum_osdp_event_type(event.Event.GetType())
 
 	switch eventData := event.Event.(type) {
+	case EventTRS:
+		if err := encodeTRSReply(C.event_trs(cEvent), eventData); err != nil {
+			C.free(unsafe.Pointer(cEvent))
+			return nil, err
+		}
 	case EventCardRead:
 		if err := checkLen("cardread", len(eventData.Data), C.OSDP_EVENT_CARDREAD_MAX_DATALEN); err != nil {
 			C.free(unsafe.Pointer(cEvent))
@@ -376,6 +381,8 @@ func decodeEvent(cEvent *C.struct_osdp_event) *Event {
 			Type:   OsdpStatusReportType(reportType),
 			Report: C.GoBytes(unsafe.Pointer(&statusReport[0]), C.int(nrEntries)),
 		}
+	case EvtTRS:
+		eventData = decodeTRSReply(C.event_trs(cEvent))
 	case EvtNotification:
 		nt, payload := decodeNotification(C.event_notif(cEvent))
 		eventData = EventNotification{Type: nt, Payload: payload}
@@ -410,6 +417,8 @@ func decodeNotification(n *C.struct_osdp_notification) (NotificationType, Notifi
 		var total, offset C.uint32_t
 		C.get_notification_mp(n, &mpType, &objectID, &total, &offset, &outcome)
 		payload = NotificationMP{MPType: MPMsgType(mpType), ObjectID: int(objectID), Total: uint32(total), Offset: uint32(offset), Outcome: MPOutcome(outcome)}
+	case NotificationTypeTRSStatus:
+		payload = NotificationTRSStatus{Status: TRSSessionStatus(C.get_notification_trs_status(n))}
 	case NotificationTypePDID:
 		var version, model C.int
 		var vendorCode, serialNumber, firmwareVersion C.uint

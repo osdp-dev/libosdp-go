@@ -438,4 +438,18 @@ static inline void set_log_callback_wrapper(void) {
     osdp_set_log_callback((osdp_log_callback_fn_t)logCallbackWrapper);
 }
 
+// Transparent reader support (TRS). cgo cannot reach members of the anonymous
+// unions in osdp_cmd/osdp_event/osdp_trs_*, so these hand out pointers to the
+// named structs inside them and Go fills or reads their fields directly.
+static inline struct osdp_trs_cmd *cmd_trs(struct osdp_cmd *cmd) { return &cmd->trs; }
+static inline struct osdp_trs_apdu *trs_cmd_apdu(struct osdp_trs_cmd *t) { return &t->apdu; }
+static inline struct osdp_trs_pin_entry *trs_cmd_pin(struct osdp_trs_cmd *t) { return &t->pin_entry; }
+static inline struct osdp_trs_reply *event_trs(struct osdp_event *ev) { return &ev->trs; }
+static inline struct osdp_trs_card_info *trs_card_info(struct osdp_trs_reply *r) { return &r->card_info; }
+static inline struct osdp_trs_card_present *trs_card_present(struct osdp_trs_reply *r) { return &r->card_present; }
+static inline struct osdp_trs_card_data *trs_card_data(struct osdp_trs_reply *r) { return &r->card_data; }
+static inline struct osdp_trs_pin_complete *trs_pin_complete(struct osdp_trs_reply *r) { return &r->pin_complete; }
+static inline struct osdp_trs_error *trs_error(struct osdp_trs_reply *r) { return &r->error; }
+static inline int get_notification_trs_status(struct osdp_notification *n) { return n->trs_status.status; }
+
 #endif // CGO_HELPERS_H

@@ -83,6 +83,7 @@ const (
 	CmdPIVData      OsdpCommandType = C.OSDP_CMD_PIVDATA
 	CmdGenAuth      OsdpCommandType = C.OSDP_CMD_GENAUTH
 	CmdCRAuth       OsdpCommandType = C.OSDP_CMD_CRAUTH
+	CmdXWR          OsdpCommandType = C.OSDP_CMD_XWR
 )
 
 // OsdpEventType represents OSDP event types
@@ -101,6 +102,7 @@ const (
 	EvtPIVDataR     OsdpEventType = C.OSDP_EVENT_PIVDATAR
 	EvtGenAuthR     OsdpEventType = C.OSDP_EVENT_GENAUTHR
 	EvtCRAuthR      OsdpEventType = C.OSDP_EVENT_CRAUTHR
+	EvtTRS          OsdpEventType = C.OSDP_EVENT_TRS
 )
 
 // Control codes for the ControlCode fields of CommandOutput, LedParams,
@@ -201,6 +203,7 @@ const (
 	NotificationTypeMPProgress NotificationType = C.OSDP_NOTIFICATION_MP_PROGRESS
 	NotificationTypeMPDone     NotificationType = C.OSDP_NOTIFICATION_MP_DONE
 	NotificationTypePDID       NotificationType = C.OSDP_NOTIFICATION_PD_ID
+	NotificationTypeTRSStatus  NotificationType = C.OSDP_NOTIFICATION_TRS_STATUS
 )
 
 // MPMsgType identifies the multipart message family carried by an MP_*
