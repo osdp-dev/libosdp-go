@@ -6,7 +6,7 @@
 
 package osdp
 
-//go:generate go run generate_config.go
+//go:generate go run ./internal/vendorgen
 
 // This file holds the single, package-wide cgo build configuration. The libosdp
 // C sources are vendored into this directory (flattened *.c files plus the clib/

@@ -1,6 +1,4 @@
-//go:build ignore
-
-// Command generate_config vendors the libosdp C sources from the libosdp/ git
+// Command vendorgen vendors the libosdp C sources from the libosdp/ git
 // submodule into this package so it builds as a standalone, `go get`-able module
 // (cgo only compiles .c files that live in the package directory), and generates
 // osdp_config.h from the upstream template with the submodule's version/git info
@@ -74,7 +72,7 @@ const (
 )
 
 func main() {
-	pkgDir, err := os.Getwd() // `go generate` runs in the package directory
+	pkgDir, err := os.Getwd() // `go generate` runs in the osdp package directory
 	must(err)
 	// The libosdp C sources live in the git submodule at <pkg>/libosdp.
 	repoRoot := filepath.Join(pkgDir, "libosdp")
@@ -152,7 +150,7 @@ func writeTreeStamp(dir string) {
 package clib
 
 // vendoredTreeHash changes whenever the vendored C sources or headers do, so
-// the go build cache recompiles them; see writeTreeStamp in generate_config.go.
+// the go build cache recompiles them; see writeTreeStamp in internal/vendorgen.
 const vendoredTreeHash = "%x"
 `, h.Sum(nil))
 	must(os.WriteFile(filepath.Join(dir, "zz_tree_stamp.go"), []byte(out), 0o644))
@@ -278,7 +276,7 @@ func copyFile(src, dst string) {
 
 func must(err error) {
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "generate_config:", err)
+		fmt.Fprintln(os.Stderr, "vendorgen:", err)
 		os.Exit(1)
 	}
 }

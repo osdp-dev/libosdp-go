@@ -3,5 +3,5 @@
 package clib
 
 // vendoredTreeHash changes whenever the vendored C sources or headers do, so
-// the go build cache recompiles them; see writeTreeStamp in generate_config.go.
+// the go build cache recompiles them; see writeTreeStamp in internal/vendorgen.
 const vendoredTreeHash = "f68cbda45bc9a2b9d48c2ac1a67427d3c5534b34cf2206dd3bb1cafe41628440"
