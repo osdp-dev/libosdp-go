@@ -425,7 +425,9 @@ func (cp *ControlPanel) ModifyFlag(pdNumber int, flags OsdpFlag, doSet bool) err
 	return nil
 }
 
-// DisablePD disables a PD managed by the CP
+// DisablePD asks the CP to stop polling a PD. The request takes effect on the
+// next refresh cycle, so IsPDEnabled reports false shortly after, not at once.
+// It errors if the PD is already disabled or a disable is already pending.
 func (cp *ControlPanel) DisablePD(pdNumber int) error {
 	if pdNumber < 0 || pdNumber >= len(cp.pdInfoList) {
 		return fmt.Errorf("invalid PD number: %d", pdNumber)
@@ -446,7 +448,8 @@ func (cp *ControlPanel) DisablePD(pdNumber int) error {
 	return nil
 }
 
-// EnablePD enables a previously disabled PD
+// EnablePD asks the CP to resume polling a disabled PD; like DisablePD it takes
+// effect on the next refresh cycle.
 func (cp *ControlPanel) EnablePD(pdNumber int) error {
 	if pdNumber < 0 || pdNumber >= len(cp.pdInfoList) {
 		return fmt.Errorf("invalid PD number: %d", pdNumber)
