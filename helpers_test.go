@@ -95,3 +95,25 @@ func startTestCP(t *testing.T, link fifoLink, infos ...*osdp.PdInfo) *osdp.Contr
 	t.Cleanup(cp.Stop)
 	return cp
 }
+
+// roundTripCommand marshals cmd through its C struct and back, failing the
+// test if marshalling errors.
+func roundTripCommand(t *testing.T, cmd *osdp.Command) *osdp.Command {
+	t.Helper()
+	got, err := osdp.RoundTripCommand(cmd)
+	if err != nil {
+		t.Fatalf("RoundTripCommand(%T): %v", cmd.Command, err)
+	}
+	return got
+}
+
+// roundTripEvent marshals ev through its C struct and back, failing the test if
+// marshalling errors.
+func roundTripEvent(t *testing.T, ev *osdp.Event) *osdp.Event {
+	t.Helper()
+	got, err := osdp.RoundTripEvent(ev)
+	if err != nil {
+		t.Fatalf("RoundTripEvent(%T): %v", ev.Event, err)
+	}
+	return got
+}
