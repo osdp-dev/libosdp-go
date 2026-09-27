@@ -241,3 +241,79 @@ func TestMfgReplyLargePayload(t *testing.T) {
 		t.Fatalf("decoded Data = %v, want %v", mfg.Data, data)
 	}
 }
+
+// Every CP-side notification, triggered for real: the link coming up, the PD's
+// identity, a secure channel on the install key, and a file transfer.
+func TestCPNotificationsDecodeOverTheWire(t *testing.T) {
+	link := newFIFOLink(t)
+	pdInfo := testPdInfo(osdp.FlagInstallMode)
+	pdInfo.ID = osdp.PdId{Version: 3, Model: 7, VendorCode: 0x0A0B0C, SerialNumber: 0xCAFE, FirmwareMajor: 2, FirmwareMinor: 1, FirmwareBuild: 9}
+	pd := startTestPD(t, link, pdInfo, []osdp.PdCapability{
+		{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
+	})
+	pd.RegisterFileOperations(newMemFile(5, nil))
+
+	notes := make(chan osdp.NotificationData, 32)
+	// The CP holds an SCBK, so it first opens SC on the install key (SCBK-D)
+	// to provision the PD.
+	cpInfo := testPdInfo(osdp.FlagInstallMode | osdp.FlagEnableNotification)
+	cpInfo.SCBK, _ = osdp.GenKey(16)
+	cp := startTestCP(t, link, cpInfo)
+	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
+		if n, ok := ev.Event.(osdp.EventNotification); ok {
+			notes <- n.Payload
+		}
+		return 0
+	})
+	cp.RegisterFileOperations(0, newMemFile(5, make([]byte, 300)))
+
+	want := map[string]osdp.NotificationData{
+		"link":     osdp.NotificationPDStatus{Online: true},
+		"identity": osdp.NotificationPDID{ID: pdInfo.ID},
+		"sc":       osdp.NotificationSCStatus{Active: true, SCBKD: true},
+		"mp-start": osdp.NotificationMP{MPType: osdp.MPMsgFileTransfer, ObjectID: 5, Total: 300},
+		"mp-done":  osdp.NotificationMP{MPType: osdp.MPMsgFileTransfer, ObjectID: 5, Total: 300, Offset: 300, Outcome: osdp.MPOutcomeOK},
+	}
+	key := func(n osdp.NotificationData) string {
+		switch p := n.(type) {
+		case osdp.NotificationPDStatus:
+			return "link"
+		case osdp.NotificationPDID:
+			return "identity"
+		case osdp.NotificationSCStatus:
+			return "sc"
+		case osdp.NotificationMP:
+			if p.Outcome != osdp.MPOutcomeOK || p.Offset == p.Total {
+				return "mp-done"
+			}
+			if p.Offset == 0 {
+				return "mp-start"
+			}
+		}
+		return ""
+	}
+
+	transferSent := false
+	deadline := time.After(15 * time.Second)
+	for len(want) > 0 {
+		if !transferSent && cp.SCWait(0, 0) {
+			cp.SubmitCommand(0, &osdp.Command{Command: osdp.CommandFileTx{ID: 5}})
+			transferSent = true
+		}
+		select {
+		case n := <-notes:
+			k := key(n)
+			w, ok := want[k]
+			if !ok {
+				continue
+			}
+			if n != w {
+				t.Errorf("%s notification = %+v, want %+v", k, n, w)
+			}
+			delete(want, k)
+		case <-time.After(50 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("never saw notifications: %v", want)
+		}
+	}
+}
