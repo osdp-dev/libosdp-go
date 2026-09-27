@@ -10,7 +10,6 @@ package osdp
 #include "cgo_helpers.h"
 */
 import "C"
-
 import (
 	"fmt"
 	"runtime"
@@ -31,6 +30,13 @@ func cpLookup(handle uintptr) (*ControlPanel, bool) {
 	cp, ok := cpRegistry[handle]
 	return cp, ok
 }
+
+// EventHandler is the callback invoked when a CP receives an event from a PD.
+type EventHandler func(pdNumber int, event *Event) int
+
+// CommandCompletionHandler is invoked when a CP command submitted via
+// SubmitCommand reaches a terminal state (delivered, failed, flushed, aborted).
+type CommandCompletionHandler func(pdNumber int, command *Command, status CompletionStatus)
 
 // ControlPanel represents an OSDP Control Panel that manages one or more Peripheral Devices
 type ControlPanel struct {

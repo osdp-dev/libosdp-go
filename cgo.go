@@ -9,10 +9,10 @@ package osdp
 //go:generate go run ./internal/vendorgen
 
 // This file holds the single, package-wide cgo build configuration. The libosdp
-// C sources are vendored into this directory (flattened *.c files plus the clib/
-// header tree) from the libosdp/ submodule by "go generate .", so the package
-// builds with a plain "go get" — no prebuilt library, CMake, submodule, or
-// external link dependency (the bundled TinyAES backend is self-contained).
+// C sources are vendored into internal/clib (which compiles them) from the
+// libosdp/ submodule by "go generate .", so the package builds with a plain
+// "go get" — no prebuilt library, CMake, submodule, or external link
+// dependency (the bundled TinyAES backend is self-contained).
 
 /*
 #cgo CFLAGS: -I${SRCDIR} -I${SRCDIR}/internal/clib/include -I${SRCDIR}/internal/clib/src -I${SRCDIR}/internal/clib/src/crypto -I${SRCDIR}/internal/clib/utils/include

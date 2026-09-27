@@ -10,7 +10,6 @@ package osdp
 #include "cgo_helpers.h"
 */
 import "C"
-
 import (
 	"fmt"
 	"runtime"
@@ -31,6 +30,18 @@ func pdLookup(handle uintptr) (*PeripheralDevice, bool) {
 	pd, ok := pdRegistry[handle]
 	return pd, ok
 }
+
+// CommandHandler is the callback invoked when a PD receives a command. It
+// returns an ACK/NAK status and, optionally, a reply event. A returned event is
+// sent as the reply to this command (for example an EventMfgReply for a
+// CommandMfg); to reply later instead, return nil and call SubmitEvent once
+// the handler has returned, and the command is ACK-ed. The handler runs while
+// the PD is locked, so it must not call PeripheralDevice methods itself.
+type CommandHandler func(command *Command) (int, *Event)
+
+// EventCompletionHandler is invoked when a PD event submitted via SubmitEvent
+// reaches a terminal state (delivered, failed, flushed, aborted).
+type EventCompletionHandler func(event *Event, status CompletionStatus)
 
 // PeripheralDevice represents an OSDP Peripheral Device
 type PeripheralDevice struct {
