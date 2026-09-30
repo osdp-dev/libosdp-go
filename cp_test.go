@@ -155,3 +155,73 @@ func TestCapturePacketsWritesPcapOnStop(t *testing.T) {
 		}
 	}
 }
+
+func TestDisablePDRefusesCommandsUntilEnabled(t *testing.T) {
+	cp, _, _ := startOnlinePair(t, 0)
+	buzz := &osdp.Command{Command: osdp.CommandBuzzer{ControlCode: osdp.BuzzerCCOff}}
+
+	if err := cp.DisablePD(0); err != nil {
+		t.Fatalf("DisablePD: %v", err)
+	}
+	waitPDEnabled(t, cp, false)
+	if err := cp.SubmitCommand(0, buzz); err == nil {
+		t.Error("SubmitCommand accepted a command for a disabled PD")
+	}
+
+	if err := cp.EnablePD(0); err != nil {
+		t.Fatalf("EnablePD: %v", err)
+	}
+	waitPDEnabled(t, cp, true)
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come back online after EnablePD")
+	}
+	if err := cp.SubmitCommand(0, buzz); err != nil {
+		t.Errorf("SubmitCommand after re-enable: %v", err)
+	}
+	if _, err := cp.IsPDEnabled(999); err == nil {
+		t.Error("IsPDEnabled accepted an out-of-range PD number")
+	}
+}
+
+// waitPDEnabled waits for a DisablePD/EnablePD request, which libosdp applies
+// on its next refresh, to show up in IsPDEnabled.
+func waitPDEnabled(t *testing.T, cp *osdp.ControlPanel, want bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if enabled, err := cp.IsPDEnabled(0); err == nil && enabled == want {
+			return
+		}
+	}
+	t.Fatalf("IsPDEnabled never became %v", want)
+}
+
+// Every queued command either runs or is flushed, and FlushCommands reports
+// exactly the ones it removed.
+func TestFlushCommandsCompletesWhatItRemoves(t *testing.T) {
+	cp, _, _ := startOnlinePair(t, 0)
+	const n = 8
+	statuses := make(chan osdp.CompletionStatus, n)
+	cp.SetCommandCompletionHandler(func(_ int, _ *osdp.Command, st osdp.CompletionStatus) { statuses <- st })
+	for i := 0; i < n; i++ {
+		if err := cp.SubmitCommand(0, &osdp.Command{Command: osdp.CommandBuzzer{ControlCode: osdp.BuzzerCCOff}}); err != nil {
+			t.Fatalf("SubmitCommand %d: %v", i, err)
+		}
+	}
+	flushed, err := cp.FlushCommands(0)
+	if err != nil {
+		t.Fatalf("FlushCommands: %v", err)
+	}
+
+	got := map[osdp.CompletionStatus]int{}
+	for i := 0; i < n; i++ {
+		select {
+		case st := <-statuses:
+			got[st]++
+		case <-time.After(10 * time.Second):
+			t.Fatalf("only %d of %d commands completed: %v", i, n, got)
+		}
+	}
+	if got[osdp.CompletionFlushed] != flushed || got[osdp.CompletionOK]+flushed != n {
+		t.Fatalf("FlushCommands = %d, completions %v; want flushed + OK = %d", flushed, got, n)
+	}
+}

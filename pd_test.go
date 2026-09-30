@@ -162,3 +162,28 @@ func TestPDHandlerReplyIsSentAsDirectReply(t *testing.T) {
 		}
 	}
 }
+
+func TestFlushEventsDropsQueuedEvents(t *testing.T) {
+	pd := startTestPD(t, newFIFOLink(t), testPdInfo(osdp.FlagInstallMode), nil) // no CP: events stay queued
+	flushed := make(chan struct{}, 4)
+	pd.SetEventCompletionHandler(func(_ *osdp.Event, st osdp.CompletionStatus) {
+		if st == osdp.CompletionFlushed {
+			flushed <- struct{}{}
+		}
+	})
+	for i := 0; i < 3; i++ {
+		if err := pd.SubmitEvent(&osdp.Event{Event: osdp.EventKeyPress{Data: []byte{'1'}}}); err != nil {
+			t.Fatalf("SubmitEvent %d: %v", i, err)
+		}
+	}
+	if n, err := pd.FlushEvents(); err != nil || n != 3 {
+		t.Fatalf("FlushEvents = %d, %v; want 3", n, err)
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-flushed:
+		case <-time.After(time.Second):
+			t.Fatalf("only %d of 3 events reported as flushed", i)
+		}
+	}
+}

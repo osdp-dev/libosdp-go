@@ -20,4 +20,7 @@ func TestGetVersionIsResolvedSemver(t *testing.T) {
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+([-+.][0-9A-Za-z.+-]*)?$`).MatchString(v) {
 		t.Fatalf("GetVersion() = %q, want a resolved semantic version", v)
 	}
+	if osdp.GetSourceInfo() == "" {
+		t.Error("GetSourceInfo() is empty")
+	}
 }
