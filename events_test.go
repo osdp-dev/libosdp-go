@@ -317,3 +317,19 @@ func TestCPNotificationsDecodeOverTheWire(t *testing.T) {
 		}
 	}
 }
+
+func TestMfgStatusEventsRoundTrip(t *testing.T) {
+	data := []byte{9, 8, 7, 6, 5}
+	statusEv := roundTripEvent(t, &osdp.Event{Event: osdp.EventMfgStatus{Data: data}})
+	got, ok := statusEv.Event.(osdp.EventMfgStatus)
+	if !ok {
+		t.Fatalf("status decoded as %T, want EventMfgStatus", statusEv.Event)
+	}
+	if !bytes.Equal(got.Data, data) {
+		t.Errorf("status data = %v, want %v", got.Data, data)
+	}
+	errEv := roundTripEvent(t, &osdp.Event{Event: osdp.EventMfgError{Data: data}})
+	if _, ok := errEv.Event.(osdp.EventMfgError); !ok {
+		t.Fatalf("error decoded as %T, want EventMfgError", errEv.Event)
+	}
+}
