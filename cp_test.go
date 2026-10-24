@@ -100,28 +100,45 @@ func TestSetFlagRejectsSetupOnlyFlag(t *testing.T) {
 	}
 }
 
-func TestAddPDAppendsAddressablePD(t *testing.T) {
-	cp, _, _ := startOnlinePair(t, 0)
-	extra := testPdInfo(osdp.FlagInstallMode)
-	extra.Address = 2
-	if err := cp.AddPD([]*osdp.PdInfo{extra}); err != nil {
-		t.Fatalf("AddPD: %v", err)
+func TestBuilderAddressesPDsInAddOrder(t *testing.T) {
+	link := newFIFOLink(t)
+	startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
+	silent := testPdInfo(osdp.FlagInstallMode)
+	silent.Address = 2
+	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode), silent)
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD 0 did not come online")
 	}
 	if enabled, err := cp.IsPDEnabled(1); err != nil || !enabled {
-		t.Fatalf("IsPDEnabled(1) = %v, %v; want the added PD enabled", enabled, err)
+		t.Fatalf("IsPDEnabled(1) = %v, %v; want the second PD enabled", enabled, err)
 	}
 	if online, err := cp.IsOnline(1); err != nil || online {
 		t.Errorf("IsOnline(1) = %v, %v; nothing answers at address 2", online, err)
 	}
-	if !cp.OnlineWait(0, 2*time.Second) {
-		t.Error("existing PD went offline after AddPD")
-	}
 	// libosdp refuses commands for a PD that is not online.
 	if err := cp.SubmitCommand(1, &osdp.Command{Command: osdp.CommandBuzzer{}}); err == nil {
-		t.Error("SubmitCommand to the offline added PD succeeded")
+		t.Error("SubmitCommand to the offline second PD succeeded")
 	}
 	if _, err := cp.IsPDEnabled(2); err == nil {
-		t.Error("IsPDEnabled(2) accepted an index past the added PD")
+		t.Error("IsPDEnabled(2) accepted an index past the last PD")
+	}
+}
+
+func TestBuildRejectsMissingInputs(t *testing.T) {
+	if _, err := osdp.NewControlPanelBuilder(nil).AddPD(testPdInfo(0)).Build(); err == nil {
+		t.Error("Build accepted a nil channel")
+	}
+	link := newFIFOLink(t)
+	ch, err := osdp.NewFIFOChannel(link.cpRx, link.cpTx)
+	if err != nil {
+		t.Fatalf("CP channel: %v", err)
+	}
+	defer ch.Close()
+	if _, err := osdp.NewControlPanelBuilder(ch).Build(); err == nil {
+		t.Error("Build accepted a CP with no PDs")
+	}
+	if _, err := osdp.NewControlPanelBuilder(ch).AddPD(nil).Build(); err == nil {
+		t.Error("Build accepted a nil PD info")
 	}
 }
 
@@ -351,7 +368,7 @@ func TestBasicCPPDCommunication(t *testing.T) {
 		}
 
 		// Create CP
-		cp, err := osdp.NewControlPanel(cpChannel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+		cp, err := osdp.NewControlPanelBuilder(cpChannel).AddPD(pdInfo).Build()
 		if err != nil {
 			t.Errorf("Failed to create CP: %v", err)
 			return

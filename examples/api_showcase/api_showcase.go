@@ -132,7 +132,7 @@ func runShowcase(channel *osdp.FIFOChannel, demo *DemoState) {
 
 	// Create Control Panel
 	fmt.Printf("Creating Control Panel with comprehensive configuration...\n")
-	cp, err := osdp.NewControlPanel(channel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(channel).AddPD(pdInfo).Build()
 	if err != nil {
 		log.Fatalf("Failed to create CP: %v", err)
 	}

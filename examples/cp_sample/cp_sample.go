@@ -76,7 +76,7 @@ func main() {
 	}
 
 	// Create Control Panel
-	cp, err := osdp.NewControlPanel(channel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(channel).AddPD(pdInfo).Build()
 	if err != nil {
 		log.Fatalf("Failed to create Control Panel: %v", err)
 	}

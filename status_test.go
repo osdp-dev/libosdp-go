@@ -137,7 +137,7 @@ func TestStatusAndMfgCommands(t *testing.T) {
 			ID: osdp.PdId{Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345},
 		}
 
-		cp, err := osdp.NewControlPanel(cpChannel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+		cp, err := osdp.NewControlPanelBuilder(cpChannel).AddPD(pdInfo).Build()
 		if err != nil {
 			t.Errorf("Failed to create CP: %v", err)
 			return
@@ -302,7 +302,7 @@ func TestSecureChannel(t *testing.T) {
 			},
 		}
 
-		cp, err := osdp.NewControlPanel(cpChannel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+		cp, err := osdp.NewControlPanelBuilder(cpChannel).AddPD(pdInfo).Build()
 		if err != nil {
 			t.Errorf("Failed to create CP: %v", err)
 			return
@@ -437,11 +437,12 @@ func TestCompletionCallbacksAndMetrics(t *testing.T) {
 	}
 	defer cpChannel.Close()
 
-	cp, err := osdp.NewControlPanel(cpChannel,
-		[]*osdp.PdInfo{{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id}},
-		osdp.LogError)
+	cp, err := osdp.NewControlPanelBuilder(cpChannel).
+		AddPD(&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id}).
+		LogLevel(osdp.LogError).
+		Build()
 	if err != nil {
-		t.Fatalf("NewControlPanel: %v", err)
+		t.Fatalf("Build CP: %v", err)
 	}
 	defer cp.Stop()
 

@@ -88,9 +88,13 @@ func startTestCP(t *testing.T, link fifoLink, infos ...*osdp.PdInfo) *osdp.Contr
 		t.Fatalf("CP channel: %v", err)
 	}
 	t.Cleanup(func() { ch.Close() })
-	cp, err := osdp.NewControlPanel(ch, infos, osdp.LogWarning)
+	b := osdp.NewControlPanelBuilder(ch).LogLevel(osdp.LogWarning)
+	for _, info := range infos {
+		b.AddPD(info)
+	}
+	cp, err := b.Build()
 	if err != nil {
-		t.Fatalf("NewControlPanel: %v", err)
+		t.Fatalf("Build CP: %v", err)
 	}
 	t.Cleanup(cp.Stop)
 	return cp

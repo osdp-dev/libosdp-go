@@ -54,7 +54,7 @@ func main() {
 		ID:       osdp.PdId{Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345},
 	}
 
-	cp, err := osdp.NewControlPanel(channel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(channel).AddPD(pdInfo).Build()
 	if err != nil {
 		log.Fatal(err)
 	}

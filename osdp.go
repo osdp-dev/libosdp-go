@@ -34,7 +34,7 @@ Two main types: ControlPanel (one bus, one or more PDs) and PeripheralDevice
 		SCBK:     scbk16Bytes,
 	}
 
-	cp, err := osdp.NewControlPanel(channel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(channel).AddPD(pdInfo).Build()
 	if err != nil {
 		return err
 	}
@@ -118,8 +118,8 @@ func GetSourceInfo() string {
 
 // PdInfo represents peripheral device information.
 // Channel is no longer carried per-PD; the C library now requires a single
-// shared channel per CP (multi-drop bus). Pass the channel to NewControlPanel
-// or NewPeripheralDevice instead.
+// shared channel per CP (multi-drop bus). Pass the channel to
+// NewControlPanelBuilder or NewPeripheralDevice instead.
 type PdInfo struct {
 	Address      int
 	BaudRate     int

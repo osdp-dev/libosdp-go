@@ -60,15 +60,48 @@ type ControlPanel struct {
 	shutdownOnce sync.Once
 }
 
-// NewControlPanel creates a new Control Panel instance.
-// channel is the shared multi-drop bus that all PDs in pdInfoList sit on. The
-// CP starts talking on the bus before this returns; call Stop to shut it down.
-func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (*ControlPanel, error) {
+// ControlPanelBuilder collects the PDs on one OSDP bus and builds the
+// ControlPanel that drives them. The PD list is fixed once the CP is built.
+type ControlPanelBuilder struct {
+	channel  Channel
+	pdInfos  []*PdInfo
+	logLevel LogLevel
+}
+
+// NewControlPanelBuilder starts building a CP on channel, the shared
+// multi-drop bus that all of its PDs sit on. Logging defaults to LogInfo.
+func NewControlPanelBuilder(channel Channel) *ControlPanelBuilder {
+	return &ControlPanelBuilder{channel: channel, logLevel: LogInfo}
+}
+
+// AddPD puts a PD on the bus. The ControlPanel addresses PDs by the order they
+// were added in, starting at 0.
+func (b *ControlPanelBuilder) AddPD(info *PdInfo) *ControlPanelBuilder {
+	b.pdInfos = append(b.pdInfos, info)
+	return b
+}
+
+// LogLevel sets the most verbose libosdp log level that is reported.
+func (b *ControlPanelBuilder) LogLevel(level LogLevel) *ControlPanelBuilder {
+	b.logLevel = level
+	return b
+}
+
+// Build sets up the CP and starts it talking on the bus before returning; call
+// Stop to shut it down.
+func (b *ControlPanelBuilder) Build() (*ControlPanel, error) {
+	channel := b.channel
+	pdInfoList := append([]*PdInfo(nil), b.pdInfos...)
 	if channel == nil {
 		return nil, fmt.Errorf("channel is required")
 	}
 	if len(pdInfoList) == 0 {
 		return nil, fmt.Errorf("at least one PD info is required")
+	}
+	for i, info := range pdInfoList {
+		if info == nil {
+			return nil, fmt.Errorf("PD %d: PD info is required", i)
+		}
 	}
 
 	cp := &ControlPanel{
@@ -86,7 +119,7 @@ func NewControlPanel(channel Channel, pdInfoList []*PdInfo, logLevel LogLevel) (
 		cp.eventQueues[i] = make(chan *Event, 100)
 	}
 
-	setupLogging(logLevel)
+	setupLogging(b.logLevel)
 
 	cp.channel = newCChannel(channel)
 
@@ -557,46 +590,4 @@ func (cp *ControlPanel) SetFlag(pdNumber int, flag OsdpFlag) error {
 // ClearFlag clears one or more OSDP flags on a PD.
 func (cp *ControlPanel) ClearFlag(pdNumber int, flag OsdpFlag) error {
 	return cp.ModifyFlag(pdNumber, flag, false)
-}
-
-// AddPD adds one or more peripheral devices to a running control panel. The new
-// PDs are appended after the existing ones and become addressable at the next
-// indices.
-func (cp *ControlPanel) AddPD(infos []*PdInfo) error {
-	if len(infos) == 0 {
-		return fmt.Errorf("at least one PD info is required")
-	}
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	if cp.ctx == nil {
-		return fmt.Errorf("control panel context is not initialized")
-	}
-
-	n := len(infos)
-	arr := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.osdp_pd_info_t{})))
-	defer C.free(arr)
-	ptr := (*[1 << 20]C.osdp_pd_info_t)(arr)
-
-	cleanups := make([]func(), 0, n)
-	defer func() {
-		for _, c := range cleanups {
-			c()
-		}
-	}()
-	for i, info := range infos {
-		cInfo, cleanup := info.asCStruct()
-		cleanups = append(cleanups, cleanup)
-		ptr[i] = cInfo
-	}
-
-	if ret := C.osdp_cp_add_pd(unsafe.Pointer(cp.ctx), C.int(n), (*C.osdp_pd_info_t)(arr)); ret != 0 {
-		return fmt.Errorf("failed to add PD(s), error code: %d", ret)
-	}
-
-	// Grow the per-PD event queues so events for the new PDs are delivered.
-	for range infos {
-		cp.eventQueues = append(cp.eventQueues, make(chan *Event, 100))
-	}
-	cp.pdInfoList = append(cp.pdInfoList, infos...)
-	return nil
 }

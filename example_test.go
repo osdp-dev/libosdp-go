@@ -47,7 +47,7 @@ func Example() {
 	})
 
 	cpChannel, _ := osdp.NewFIFOChannel(toCP, toPD)
-	cp, err := osdp.NewControlPanel(cpChannel, []*osdp.PdInfo{info}, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(cpChannel).AddPD(info).Build()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func Example() {
 	// Output: PD replied "pong"
 }
 
-func ExampleNewControlPanel() {
+func ExampleControlPanelBuilder() {
 	channel, err := osdp.NewSerialChannel("/dev/ttyUSB0", 115200)
 	if err != nil {
 		log.Fatal(err)
@@ -80,8 +80,9 @@ func ExampleNewControlPanel() {
 	defer channel.Close()
 
 	scbk, _ := os.ReadFile("/etc/osdp/pd-101.scbk") // provisioned earlier
-	pds := []*osdp.PdInfo{{Address: 101, BaudRate: 115200, Flags: osdp.FlagEnforceSecure, SCBK: scbk}}
-	cp, err := osdp.NewControlPanel(channel, pds, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(channel).
+		AddPD(&osdp.PdInfo{Address: 101, BaudRate: 115200, Flags: osdp.FlagEnforceSecure, SCBK: scbk}).
+		Build()
 	if err != nil {
 		log.Fatal(err)
 	}

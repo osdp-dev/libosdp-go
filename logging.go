@@ -35,7 +35,7 @@ var (
 
 	// libosdp skips level filtering once a log callback is installed, so it is
 	// done here. Like the handler it is process-global: the most recent
-	// NewControlPanel/NewPeripheralDevice/InitializeLogging level applies.
+	// ControlPanelBuilder/NewPeripheralDevice/InitializeLogging level applies.
 	logLevelFilter atomic.Int32
 )
 

@@ -303,7 +303,7 @@ func runCP(channel *osdp.FIFOChannel, fileID int, sigChan chan os.Signal) {
 	}
 
 	// Create CP
-	cp, err := osdp.NewControlPanel(channel, []*osdp.PdInfo{pdInfo}, osdp.LogInfo)
+	cp, err := osdp.NewControlPanelBuilder(channel).AddPD(pdInfo).Build()
 	if err != nil {
 		log.Fatalf("Failed to create CP: %v", err)
 	}

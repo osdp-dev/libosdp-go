@@ -77,7 +77,7 @@ func startCP(l link, info *osdp.PdInfo) *osdp.ControlPanel {
 	if err != nil {
 		log.Fatal(err)
 	}
-	cp, err := osdp.NewControlPanel(ch, []*osdp.PdInfo{info}, osdp.LogWarning)
+	cp, err := osdp.NewControlPanelBuilder(ch).AddPD(info).LogLevel(osdp.LogWarning).Build()
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -124,7 +124,7 @@ func useWithControlPanel() {
 	}
 
 	// Create Control Panel - this will generate LibOSDP logs
-	cp, err := osdp.NewControlPanel(channel, []*osdp.PdInfo{pdInfo}, osdp.LogDebug)
+	cp, err := osdp.NewControlPanelBuilder(channel).AddPD(pdInfo).LogLevel(osdp.LogDebug).Build()
 	if err != nil {
 		logger.Printf("Failed to create Control Panel: %v", err)
 		return

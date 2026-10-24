@@ -38,6 +38,7 @@ var unboundByDesign = map[string]string{
 	"OSDP_PD_CAP_UNUSED":     "placeholder function code 0",
 	"OSDP_PD_ONLINE_TOUT_MS": "internal timing constant, documentation only",
 	"osdp_logger_init":       "would replace the callback that routes logs to SetLogHandler",
+	"osdp_cp_add_pd":         "ControlPanelBuilder hands every PD to osdp_cp_setup",
 }
 
 var cComment = regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`)

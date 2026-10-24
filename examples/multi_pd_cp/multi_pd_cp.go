@@ -111,7 +111,11 @@ func main() {
 
 	// Create Control Panel
 	fmt.Println("Creating Multi-PD Control Panel...")
-	cp, err := osdp.NewControlPanel(channels[0], pdInfoList, osdp.LogInfo)
+	builder := osdp.NewControlPanelBuilder(channels[0])
+	for _, pdInfo := range pdInfoList {
+		builder.AddPD(pdInfo)
+	}
+	cp, err := builder.Build()
 	if err != nil {
 		log.Fatalf("Failed to create Control Panel: %v", err)
 	}
