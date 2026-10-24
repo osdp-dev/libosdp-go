@@ -272,5 +272,7 @@ type OsdpCardFormat int
 const (
 	CardFormatUnspecified OsdpCardFormat = C.OSDP_CARD_FMT_RAW_UNSPECIFIED
 	CardFormatWiegand     OsdpCardFormat = C.OSDP_CARD_FMT_RAW_WIEGAND
-	CardFormatASCII       OsdpCardFormat = C.OSDP_CARD_FMT_ASCII
+	// CardFormatASCII (osdp_FMT) is not supported: a PD's SubmitEvent rejects
+	// it and a CP ignores osdp_FMT replies.
+	CardFormatASCII OsdpCardFormat = C.OSDP_CARD_FMT_ASCII
 )

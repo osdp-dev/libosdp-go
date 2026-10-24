@@ -411,6 +411,34 @@ const char *osdp_get_source_info()
 	}
 }
 
+void osdp_get_abi_info(struct osdp_abi_info *info)
+{
+	struct osdp_abi_info full;
+	uint32_t size;
+
+	if (info == NULL) {
+		return;
+	}
+	full.options = 0;
+#ifdef OPT_OSDP_RX_ZERO_COPY
+	full.options |= OSDP_ABI_OPT_RX_ZERO_COPY;
+#endif
+#ifdef OPT_OSDP_LOG_MINIMAL
+	full.options |= OSDP_ABI_OPT_LOG_MINIMAL;
+#endif
+#ifdef OPT_BUILD_OSDP_TRS
+	full.options |= OSDP_ABI_OPT_TRS;
+#endif
+	full.sizeof_cmd = sizeof(struct osdp_cmd);
+	full.sizeof_event = sizeof(struct osdp_event);
+	full.sizeof_channel = sizeof(struct osdp_channel);
+	full.sizeof_pd_info = sizeof(osdp_pd_info_t);
+
+	size = info->size < sizeof(full) ? info->size : (uint32_t)sizeof(full);
+	full.size = size;
+	memcpy(info, &full, size);
+}
+
 void osdp_get_sc_status_mask(const osdp_t *ctx, uint8_t *bitmask)
 {
 	input_check(ctx);
@@ -576,6 +604,22 @@ void osdp_engines_abort(struct osdp_pd *pd)
 	osdp_file_tx_abort(pd);
 	osdp_piv_abort(pd);
 	osdp_bio_abort(pd);
+}
+
+void osdp_engines_rebind(struct osdp_pd *pd)
+{
+	struct osdp_multipart *mp[] = {
+		TO_FILE(pd) ? &TO_FILE(pd)->mp : NULL,
+		TO_PIV(pd) ? &TO_PIV(pd)->mp : NULL,
+		TO_BIO(pd) ? &TO_BIO(pd)->mp : NULL,
+	};
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZEOF(mp); i++) {
+		if (mp[i] && mp[i]->event_cb == osdp_mp_pd_notify) {
+			osdp_mp_set_event_cb(mp[i], osdp_mp_pd_notify, pd);
+		}
+	}
 }
 
 bool osdp_mp_engine_busy(struct osdp_pd *pd)

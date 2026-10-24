@@ -734,14 +734,13 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	case REPLY_FMT:
-		/**
-		 * osdp_FMT was underspecified by SIA from get-go. It was marked
-		 * for deprecation in v2.2.2. To avoid confusions, we will just
-		 * ignore it here.
-		 *
-		 * See: https://github.com/osdp-dev/libosdp/issues/206
+		/*
+		 * LibOSDP does not support osdp_FMT: its Character Count is
+		 * underspecified (see
+		 * https://github.com/osdp-dev/libosdp/issues/206), so the reply
+		 * is dropped and no event is raised.
 		 */
-		LOG_WRN("Ignoring deprecated response osdp_FMT");
+		LOG_WRN("Ignoring unsupported reply osdp_FMT");
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	case REPLY_BUSY:
@@ -806,6 +805,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			}
 			if (t > 0) {
 				cp_dispatch_event(pd, &event);
+				osdp_bio_cp_reply_finish(pd);
 			}
 			ret = OSDP_CP_ERR_NONE;
 			break;
@@ -889,7 +889,6 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 		osdp_compute_session_keys(pd);
 		if (osdp_verify_pd_cryptogram(pd) != 0) {
 			LOG_ERR("Failed to verify PD cryptogram");
-			osdp_metrics_report(pd, OSDP_METRIC_SC_FAILURE);
 			return OSDP_CP_ERR_APP;
 		}
 		ret = OSDP_CP_ERR_NONE;
@@ -1869,9 +1868,6 @@ static void cp_transition_effects(struct osdp_pd *pd, enum osdp_cp_state_e cur,
 					"due to ENFORCE_SECURE");
 			}
 			break;
-		case OSDP_CP_STATE_SC_CHLNG:
-			osdp_metrics_report(pd, OSDP_METRIC_SC_HANDSHAKE);
-			break;
 		case OSDP_CP_STATE_SC_SCRYPT:
 			sc_activate(pd);
 			notify_sc_status(pd);
@@ -2360,9 +2356,10 @@ static int cp_band_admit(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 		return -1;
 	}
 	/*
-	 * Both carriers of a C-APDU are checked here so an oversized one is
-	 * turned away while the app can still act on it; the frame builder
-	 * would otherwise catch it only once the band is already running.
+	 * Both carriers of a C-APDU are checked here so an oversized one, or a
+	 * PIN layout the wire cannot carry, is turned away while the app can
+	 * still act on it; the frame builder would otherwise catch it only
+	 * once the band is already running.
 	 */
 	if (cp_cmd_is_trs(cmd, OSDP_TRS_CMD_SEND_APDU) ||
 	    cp_cmd_is_trs(cmd, OSDP_TRS_CMD_ENTER_PIN)) {
@@ -2375,6 +2372,10 @@ static int cp_band_admit(struct osdp_pd *pd, const struct osdp_cmd *cmd)
 			LOG_ERR("C-APDU of %d bytes cannot fit the %d-byte "
 				"packet (max %d for this command)",
 				apdu_len, get_tx_buf_size(pd), capacity);
+			return -1;
+		}
+		if (is_pin &&
+		    osdp_trs_pin_entry_check(pd, &cmd->trs.pin_entry)) {
 			return -1;
 		}
 	}
@@ -2524,7 +2525,10 @@ static int cp_expand_pd_array(struct osdp *ctx, int num_pd,
 	ctx->pd = *new_pd_array;
 	ctx->_num_pd = *old_num_pd + num_pd;
 #ifndef OPT_OSDP_STATIC
-	memcpy(*new_pd_array, *old_pd_array, sizeof(struct osdp_pd) * *old_num_pd);
+	if (*old_num_pd > 0) {
+		memcpy(*new_pd_array, *old_pd_array,
+		       sizeof(struct osdp_pd) * *old_num_pd);
+	}
 #endif /* OPT_OSDP_STATIC */
 	return 0;
 }
@@ -2646,6 +2650,9 @@ static int cp_add_pd(struct osdp *ctx, int num_pd, const osdp_pd_info_t *info_li
 		}
 	}
 	SET_CURRENT_PD(ctx, 0);
+	for (i = 0; i < old_num_pd; i++) {
+		osdp_engines_rebind(osdp_to_pd(ctx, i));
+	}
 
 #ifndef OPT_OSDP_STATIC
 	if (old_num_pd) {
@@ -2711,14 +2718,21 @@ error:
 int osdp_cp_add_pd(osdp_t *ctx, int num_pd, const osdp_pd_info_t *info)
 {
 	input_check(ctx);
+	input_check_not_tearing_down(ctx);
+	input_check_not_running(ctx);
+	input_check_not_sealed(ctx);
 	struct osdp *cp_ctx = TO_OSDP(ctx);
+	int rc;
 
 	if (!num_pd || !info) {
 		LOG_PRINT("num_pd must be > 0 and info cannot be NULL");
 		return -1;
 	}
 
-	if (cp_add_pd(cp_ctx, num_pd, info)) {
+	cp_ctx->running = true;
+	rc = cp_add_pd(cp_ctx, num_pd, info);
+	cp_ctx->running = false;
+	if (rc) {
 		LOG_PRINT("Failed to add PDs");
 		return -1;
 	}
@@ -2735,7 +2749,7 @@ void osdp_cp_teardown(osdp_t *ctx)
 	struct osdp *cp_ctx = TO_OSDP(ctx);
 
 	if (cp_ctx->tearing_down) {
-		return; /* re-entrant teardown from a completion */
+		return; /* again, from a completion this teardown fired */
 	}
 	cp_ctx->tearing_down = true;
 
@@ -2786,16 +2800,19 @@ void osdp_cp_refresh(osdp_t *ctx)
 {
 	input_check(ctx);
 	input_check_not_tearing_down_noret(ctx);
+	input_check_not_running_noret(ctx);
 	int next_pd_idx, refresh_count = 0;
 	struct osdp_pd *pd;
 	struct osdp *cp_ctx = TO_OSDP(ctx);
 
+	cp_ctx->sealed = true;
 	if (cp_ctx->_num_pd == 0) {
 		return;
 	}
 	if (cp_ctx->_current_pd == NULL) {
 		SET_CURRENT_PD(cp_ctx, 0);
 	}
+	cp_ctx->running = true;
 	while (refresh_count < cp_ctx->_num_pd) {
 		pd = cp_ctx->_current_pd;
 
@@ -2817,36 +2834,48 @@ void osdp_cp_refresh(osdp_t *ctx)
 		SET_CURRENT_PD(cp_ctx, next_pd_idx);
 		refresh_count++;
 	}
+	cp_ctx->running = false;
 }
 
-void osdp_cp_set_event_callback(osdp_t *ctx, cp_event_callback_t cb, void *arg)
+int osdp_cp_set_event_callback(osdp_t *ctx, cp_event_callback_t cb, void *arg)
 {
 	input_check(ctx);
+	input_check_not_sealed(ctx);
 	TO_OSDP(ctx)->event_callback = cb;
 	TO_OSDP(ctx)->event_callback_arg = arg;
+	return 0;
 }
 
-void osdp_cp_set_command_completion_callback(osdp_t *ctx,
-					     cp_command_completion_callback_t cb,
-					     void *arg)
+int osdp_cp_set_command_completion_callback(osdp_t *ctx,
+					    cp_command_completion_callback_t cb,
+					    void *arg)
 {
 	input_check(ctx);
+	input_check_not_sealed(ctx);
 	TO_OSDP(ctx)->command_completion_callback = cb;
 	TO_OSDP(ctx)->command_completion_callback_arg = arg;
+	return 0;
 }
 
 int osdp_cp_submit_command(osdp_t *ctx, int pd_idx, const struct osdp_cmd *cmd)
 {
 	input_check(ctx, pd_idx);
 	input_check_not_tearing_down(ctx);
+	struct osdp *cp_ctx = TO_OSDP(ctx);
 	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
+	bool was_running = cp_ctx->running;
+	int ret;
 
-	return cp_submit_command(pd, cmd);
+	/* Starting a file transfer opens the file from in here. */
+	cp_ctx->running = true;
+	ret = cp_submit_command(pd, cmd);
+	cp_ctx->running = was_running;
+	return ret;
 }
 
 /*
- * Detach the queue, then drain the detached copy. A completion may submit,
- * flush or tear down, and must not mutate the list this loop is walking.
+ * Detach the queue, then drain the detached copy. A completion may submit or
+ * flush, and must not mutate the list this loop is walking.
  * list_t holds only head/tail and node_t has no back-pointer to its list, so
  * taking the struct by value and re-initialising the live one is a safe O(1)
  * splice that needs no new c-utils API.
@@ -2900,10 +2929,14 @@ int osdp_cp_flush_commands(osdp_t *ctx, int pd_idx)
 {
 	input_check(ctx, pd_idx);
 	input_check_not_tearing_down(ctx);
+	struct osdp *cp_ctx = TO_OSDP(ctx);
 	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
+	bool was_running = cp_ctx->running;
 	int count;
 
+	cp_ctx->running = true;
 	count = cp_drain_queue(pd, OSDP_COMPLETION_FLUSHED);
+	cp_ctx->running = was_running;
 #ifdef OPT_BUILD_OSDP_TRS
 	/*
 	 * The band markers went out with the queue, so the tail is now wherever
@@ -3102,8 +3135,15 @@ int osdp_cp_enable_pd(osdp_t *ctx, int pd_idx)
 
 bool osdp_cp_is_pd_enabled(const osdp_t *ctx, int pd_idx)
 {
-	input_check(ctx, pd_idx);
-	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
+	input_check(ctx);
+	struct osdp_pd *pd;
+
+	/* input_check()'s -1 for a bad index would read back as true. */
+	if (pd_idx < 0 || pd_idx >= NUM_PD(ctx)) {
+		LOG_PRINT("Invalid PD number %d", pd_idx);
+		return false;
+	}
+	pd = osdp_to_pd(ctx, pd_idx);
 
 	return pd->state != OSDP_CP_STATE_DISABLED;
 }

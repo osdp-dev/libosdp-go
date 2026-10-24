@@ -129,6 +129,18 @@ static bool event_is_reply_to(int cmd_id, const struct osdp_event *event)
 		 * instead of an ACK. See OSDP v2.2 subclause 6.9. */
 		return event->type == OSDP_EVENT_STATUS &&
 		       event->status.type == OSDP_STATUS_REPORT_OUTPUT;
+	case CMD_LSTAT:
+		return event->type == OSDP_EVENT_STATUS &&
+		       event->status.type == OSDP_STATUS_REPORT_LOCAL;
+	case CMD_ISTAT:
+		return event->type == OSDP_EVENT_STATUS &&
+		       event->status.type == OSDP_STATUS_REPORT_INPUT;
+	case CMD_OSTAT:
+		return event->type == OSDP_EVENT_STATUS &&
+		       event->status.type == OSDP_STATUS_REPORT_OUTPUT;
+	case CMD_RSTAT:
+		return event->type == OSDP_EVENT_STATUS &&
+		       event->status.type == OSDP_STATUS_REPORT_READER;
 	default:
 		return false;
 	}
@@ -144,18 +156,11 @@ static int pd_translate_event(struct osdp_pd *pd,
 		if (event->cardread.format == OSDP_CARD_FMT_RAW_UNSPECIFIED ||
 		    event->cardread.format == OSDP_CARD_FMT_RAW_WIEGAND) {
 			reply_code = REPLY_RAW;
-		} else if (event->cardread.format == OSDP_CARD_FMT_ASCII) {
-			/**
-			 * osdp_FMT was underspecified by SIA from get-go. It
-			 * was marked for deprecation in v2.2.2.
-			 *
-			 * See: https://github.com/osdp-dev/libosdp/issues/206
-			 */
-			LOG_WRN("Event CardRead::format::OSDP_CARD_FMT_ASCII"
-				" is deprecated. Ignoring");
 		} else {
-			LOG_ERR("Event: cardread; Error: unknown format");
-			break;
+			/* osdp_pd_submit_event() refuses every other format */
+			LOG_ERR("Event: cardread; unsupported format %d",
+				event->cardread.format);
+			BUG();
 		}
 		break;
 	case OSDP_EVENT_KEYPRESS:
@@ -689,6 +694,10 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 			ret = OSDP_PD_ERR_REPLY;
 			break;
 		}
+		if (pd_take_inline_reply(pd)) {
+			ret = OSDP_PD_ERR_NONE;
+			break;
+		}
 		if (pd_prebuild_status_reply(pd, REPLY_LSTATR, &cmd.status)) {
 			break;
 		}
@@ -707,6 +716,10 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		cmd.status.type = OSDP_STATUS_REPORT_INPUT;
 		if (!do_command_callback(pd, &cmd)) {
 			ret = OSDP_PD_ERR_REPLY;
+			break;
+		}
+		if (pd_take_inline_reply(pd)) {
+			ret = OSDP_PD_ERR_NONE;
 			break;
 		}
 		if (pd_prebuild_status_reply(pd, REPLY_ISTATR, &cmd.status)) {
@@ -729,6 +742,10 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 			ret = OSDP_PD_ERR_REPLY;
 			break;
 		}
+		if (pd_take_inline_reply(pd)) {
+			ret = OSDP_PD_ERR_NONE;
+			break;
+		}
 		if (pd_prebuild_status_reply(pd, REPLY_OSTATR, &cmd.status)) {
 			break;
 		}
@@ -743,6 +760,10 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		cmd.status.type = OSDP_STATUS_REPORT_READER;
 		if (!do_command_callback(pd, &cmd)) {
 			ret = OSDP_PD_ERR_REPLY;
+			break;
+		}
+		if (pd_take_inline_reply(pd)) {
+			ret = OSDP_PD_ERR_NONE;
 			break;
 		}
 		if (pd_prebuild_status_reply(pd, REPLY_RSTATR, &cmd.status)) {
@@ -1036,12 +1057,14 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		ret = OSDP_PD_ERR_NONE;
 		break;
 	case CMD_FILETRANSFER:
-		ret = osdp_file_cmd_tx_decode(pd, buf + pos, len);
-		if (ret == 0) {
-			ret = OSDP_PD_ERR_NONE;
-			pd->reply_id = REPLY_FTSTAT;
+		if (osdp_file_cmd_tx_decode(pd, buf + pos, len) < 0) {
+			pd->reply_id = REPLY_NAK;
+			pd->nak_code = OSDP_PD_NAK_RECORD;
+			ret = OSDP_PD_ERR_REPLY;
 			break;
 		}
+		pd->reply_id = REPLY_FTSTAT;
+		ret = OSDP_PD_ERR_NONE;
 		break;
 	case CMD_PIVDATA:
 		if (len != CMD_PIVDATA_DATA_LEN) {
@@ -1192,7 +1215,6 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 		}
 		pd_sc_deactivate(pd);
 		osdp_sc_setup(pd);
-		osdp_metrics_report(pd, OSDP_METRIC_SC_HANDSHAKE);
 		memcpy(pd->sc.cp_random, buf + pos, 8);
 		pd->reply_id = REPLY_CCRYPT;
 		ret = OSDP_PD_ERR_NONE;
@@ -1217,7 +1239,6 @@ static int pd_decode_command(struct osdp_pd *pd, uint8_t *buf, int len)
 			 * verify the CP_crypt.
 			 */
 			pd->nak_code = OSDP_PD_NAK_SC_UNSUP;
-			osdp_metrics_report(pd, OSDP_METRIC_SC_FAILURE);
 			LOG_WRN("failed to verify CP_crypt");
 			break;
 		}
@@ -2043,7 +2064,7 @@ void osdp_pd_teardown(osdp_t *ctx)
 	struct osdp *pd_ctx = TO_OSDP(ctx);
 
 	if (pd_ctx->tearing_down) {
-		return; /* re-entrant teardown from a completion */
+		return; /* again, from a completion this teardown fired */
 	}
 	pd_ctx->tearing_down = true;
 
@@ -2090,14 +2111,20 @@ void osdp_pd_refresh(osdp_t *ctx)
 {
 	input_check(ctx);
 	input_check_not_tearing_down_noret(ctx);
+	input_check_not_running_noret(ctx);
+	struct osdp *pd_ctx = TO_OSDP(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
+	pd_ctx->sealed = true;
+	pd_ctx->running = true;
 	osdp_pd_update(pd);
+	pd_ctx->running = false;
 }
 
-void osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap)
+int osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap)
 {
 	input_check(ctx);
+	input_check_not_sealed(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
 	osdp_pd_set_attributes(pd, cap, NULL);
@@ -2107,27 +2134,32 @@ void osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap)
 	if (pd->cap[OSDP_PD_CAP_COMMUNICATION_SECURITY].compliance_level == 0) {
 		SET_FLAG(pd, PD_FLAG_SC_DISABLED);
 	}
+	return 0;
 }
 
-void osdp_pd_set_command_callback(osdp_t *ctx, pd_command_callback_t cb,
-				  void *arg)
+int osdp_pd_set_command_callback(osdp_t *ctx, pd_command_callback_t cb,
+				 void *arg)
 {
 	input_check(ctx);
+	input_check_not_sealed(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
 	pd->command_callback_arg = arg;
 	pd->command_callback = cb;
+	return 0;
 }
 
-void osdp_pd_set_event_completion_callback(osdp_t *ctx,
-					   pd_event_completion_callback_t cb,
-					   void *arg)
+int osdp_pd_set_event_completion_callback(osdp_t *ctx,
+					  pd_event_completion_callback_t cb,
+					  void *arg)
 {
 	input_check(ctx);
+	input_check_not_sealed(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
 
 	pd->event_completion_callback = cb;
 	pd->event_completion_callback_arg = arg;
+	return 0;
 }
 
 /**
@@ -2167,6 +2199,24 @@ int osdp_pd_submit_event(osdp_t *ctx, const struct osdp_event *event)
 	}
 
 	if (event->type <= 0 || event->type >= OSDP_EVENT_SENTINEL) {
+		return -1;
+	}
+
+	if (event->type == OSDP_EVENT_CARDREAD &&
+	    event->cardread.format != OSDP_CARD_FMT_RAW_UNSPECIFIED &&
+	    event->cardread.format != OSDP_CARD_FMT_RAW_WIEGAND) {
+		/*
+		 * osdp_FMT's Character Count is underspecified (see
+		 * https://github.com/osdp-dev/libosdp/issues/206), so LibOSDP
+		 * does not support it; refuse it here, as pd_translate_event()
+		 * has no reply to carry it.
+		 */
+		if (event->cardread.format == OSDP_CARD_FMT_ASCII) {
+			LOG_ERR("Event: cardread; osdp_FMT is not supported");
+		} else {
+			LOG_ERR("Event: cardread; unsupported format %d",
+				event->cardread.format);
+		}
 		return -1;
 	}
 
@@ -2223,10 +2273,14 @@ int osdp_pd_flush_events(osdp_t *ctx)
 {
 	input_check(ctx);
 	input_check_not_tearing_down(ctx);
-	int count;
+	struct osdp *pd_ctx = TO_OSDP(ctx);
 	struct osdp_pd *pd = GET_CURRENT_PD(ctx);
+	bool was_running = pd_ctx->running;
+	int count;
 
+	pd_ctx->running = true;
 	count = pd_drain_queue(pd, OSDP_COMPLETION_FLUSHED);
+	pd_ctx->running = was_running;
 
 	return count;
 }

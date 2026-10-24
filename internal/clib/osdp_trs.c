@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Siddharth Chandrasekaran <sidcha@osdp.dev>
+ * Copyright (c) 2022-2026 Siddharth Chandrasekaran <sidcha@osdp.dev>
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -162,6 +162,42 @@ static int trs_pin_pos_to_wire(uint16_t pos_bits, uint8_t *offset,
 	return -1;
 }
 
+int osdp_trs_pin_entry_check(struct osdp_pd *pd,
+			     const struct osdp_trs_pin_entry *pe)
+{
+	uint8_t wire;
+	bool unit_bytes;
+
+	if (trs_pin_format_to_wire(pe->pin_block.format, &wire)) {
+		LOG_ERR("TRS: PIN format %d unknown",
+			(int)pe->pin_block.format);
+		return -1;
+	}
+	if (trs_pin_pos_to_wire(pe->pin_block.offset_bits, &wire,
+				&unit_bytes)) {
+		LOG_ERR("TRS: PIN offset %u not wire-representable",
+			pe->pin_block.offset_bits);
+		return -1;
+	}
+	if (trs_pin_pos_to_wire(pe->pin_length_field.offset_bits, &wire,
+				&unit_bytes)) {
+		LOG_ERR("TRS: PIN-length offset %u not wire-representable",
+			pe->pin_length_field.offset_bits);
+		return -1;
+	}
+	/* Both go out as 4-bit nibbles; reject an out-of-range value rather
+	 * than masking it down to something the reader would silently act
+	 * on. */
+	if (pe->pin_length_field.size_bits > 0x0f ||
+	    pe->pin_block.size_bytes > 0x0f) {
+		LOG_ERR("TRS: PIN length/block size not wire-representable (%u/%u)",
+			pe->pin_length_field.size_bits,
+			pe->pin_block.size_bytes);
+		return -1;
+	}
+	return 0;
+}
+
 static int trs_pin_pos_from_wire(uint8_t offset, bool unit_bytes)
 {
 	return offset * (unit_bytes ? 8 : 1);
@@ -320,8 +356,10 @@ int osdp_trs_cmd_build(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		bool unit_bytes;
 		uint8_t offset;
 
-		if (max_len - len < 17 ||
-		    trs_pin_format_to_wire(pe->pin_block.format, &byte)) {
+		if (max_len - len < 17 || osdp_trs_pin_entry_check(pd, pe)) {
+			return -1;
+		}
+		if (trs_pin_format_to_wire(pe->pin_block.format, &byte)) {
 			return -1;
 		}
 		buf[len++] = pe->timeout_initial;
@@ -330,8 +368,6 @@ int osdp_trs_cmd_build(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		 * [2]=right justify, [1:0]=PIN format */
 		if (trs_pin_pos_to_wire(pe->pin_block.offset_bits, &offset,
 					&unit_bytes)) {
-			LOG_ERR("TRS: PIN offset %u not wire-representable",
-				pe->pin_block.offset_bits);
 			return -1;
 		}
 		byte |= pe->pin_block.right_justify ? BIT(2) : 0;
@@ -339,24 +375,13 @@ int osdp_trs_cmd_build(struct osdp_pd *pd, const struct osdp_cmd *cmd,
 		byte |= unit_bytes ? BIT(7) : 0;
 		buf[len++] = byte;
 		/* bmPINBlockString: [7:4]=PIN-length field size (bits),
-		 * [3:0]=PIN block size (bytes). Both are 4-bit wire nibbles;
-		 * reject an out-of-range value rather than masking it down to
-		 * something the reader would silently act on. */
-		if (pe->pin_length_field.size_bits > 0x0f ||
-		    pe->pin_block.size_bytes > 0x0f) {
-			LOG_ERR("TRS: PIN length/block size not wire-representable (%u/%u)",
-				pe->pin_length_field.size_bits,
-				pe->pin_block.size_bytes);
-			return -1;
-		}
+		 * [3:0]=PIN block size (bytes) */
 		buf[len++] = (uint8_t)(pe->pin_length_field.size_bits << 4 |
 				       pe->pin_block.size_bytes);
 		/* bmPINLengthFormat: [4]=offset unit is bytes,
 		 * [3:0]=PIN-length field offset */
 		if (trs_pin_pos_to_wire(pe->pin_length_field.offset_bits,
 					&offset, &unit_bytes)) {
-			LOG_ERR("TRS: PIN-length offset %u not wire-representable",
-				pe->pin_length_field.offset_bits);
 			return -1;
 		}
 		byte = offset;

@@ -349,7 +349,8 @@ typedef void (*osdp_flush_fn_t)(void *data);
 
 /**
  * @brief pointer to function that closes the underlying channel. This call is
- * made when LibOSDP is terminating, once per PD.
+ * made once per context, from osdp_cp_teardown() or osdp_pd_teardown(); a CP
+ * shares one channel among all its PDs.
  *
  * @param data for use by underlying layers. osdp_channel::data is passed
  */
@@ -621,9 +622,13 @@ enum osdp_biometric_status_e {
  *
  * @note When the reply is multi-part (see @ref OSDP_FLAG_BIOREADR_MULTIPART),
  * this command completes once the template has been reassembled, not when its
- * first fragment arrives -- unless another feature engine (a file transfer,
- * say) is already running an operation on this PD, in which case the command
- * completes when the first fragment is accepted, as it does without the flag.
+ * first fragment arrives, and the reassembled `OSDP_EVENT_BIOREADR` reaches
+ * the event callback before the command completes. The exception is when
+ * another feature engine (a file transfer, say) is already running an
+ * operation on this PD: the command then completes when the first fragment is
+ * accepted, as it does without the flag, and the reassembled event arrives on
+ * a later poll, after the completion. If that reassembly fails, no event
+ * follows; its @c OSDP_NOTIFICATION_MP_DONE reports how it ended.
  */
 struct osdp_cmd_bioread {
 	/**
@@ -1355,8 +1360,9 @@ enum osdp_trs_pin_complete_e {
  *
  * APDU positions are expressed in bits from the start of the APDU payload.
  * Not every position is expressible on the wire: it must be byte-aligned (up
- * to 120 bits) or fall within the first 15 bits; anything else fails the
- * command submission.
+ * to 120 bits) or fall within the first 15 bits. A position outside that, a
+ * PIN-length field over 15 bits or a PIN block over 15 bytes fails the command
+ * submission.
  */
 struct osdp_trs_pin_entry {
 	uint8_t timeout_initial; /**< First-digit timeout in seconds (0 = reader default) */
@@ -1632,7 +1638,11 @@ struct osdp_cmd {
 enum osdp_event_cardread_format_e {
 	OSDP_CARD_FMT_RAW_UNSPECIFIED, /**< Unspecified card format */
 	OSDP_CARD_FMT_RAW_WIEGAND, /**< Wiegand card format */
-	OSDP_CARD_FMT_ASCII, /**< ASCII card format (deprecated; don't use) */
+	/**
+	 * ASCII card format (osdp_FMT). Not supported: osdp_pd_submit_event()
+	 * rejects it and a CP ignores osdp_FMT replies.
+	 */
+	OSDP_CARD_FMT_ASCII,
 	OSDP_CARD_FMT_SENTINEL /**< Max card format value */
 };
 
@@ -1650,9 +1660,9 @@ struct osdp_event_cardread {
 	 */
 	enum osdp_event_cardread_format_e format;
 	/**
-	 * Direction of data in @a data array.
-	 * - 0 - Forward
-	 * - 1 - Backward
+	 * Read direction (0 forward, 1 reverse). Only osdp_FMT carries it
+	 * (OSDP v2.2 §7.11), which LibOSDP does not support; osdp_RAW has no
+	 * direction. Always 0 on events LibOSDP reports; ignored on submit.
 	 */
 	int direction;
 	/**
@@ -1880,6 +1890,12 @@ struct osdp_event {
  * event via `osdp_pd_submit_event()`. Submitting it from within this callback
  * sends it as the reply to the command itself; submitting it later sends it as
  * a poll response and this command is `osdp_ACK`-ed.
+ *
+ * @note `OSDP_CMD_STATUS` is answered the same way: submit an
+ * `OSDP_EVENT_STATUS` of the queried type from within this callback, which
+ * also lets `osdp_pd_submit_event()` refuse a report whose entry count does not
+ * match the PD's capability. An app may instead fill in `cmd->status` before
+ * returning; that report is sent when no status event was submitted.
  */
 typedef int (*pd_command_callback_t)(void *arg, struct osdp_cmd *cmd);
 
@@ -1967,6 +1983,20 @@ osdp_t *osdp_pd_setup(struct osdp_channel *channel, const osdp_pd_info_t *info);
  * getters are exempt: osdp_get_status_mask(), osdp_get_sc_status_mask(),
  * osdp_cp_get_pd_id() and osdp_get_file_tx_status() mutate nothing and may be
  * called concurrently -- see their notes.
+ *
+ * @note LibOSDP runs the application's callbacks -- channel, file ops,
+ * command, event, completion and log -- from inside osdp_cp_refresh(),
+ * osdp_pd_refresh(), the flush calls, teardown, and osdp_cp_submit_command()
+ * (which opens the file of an OSDP_CMD_FILE_TX it starts). From inside a
+ * callback, an application may submit, flush, cancel and query the context the
+ * callback belongs to. LibOSDP refuses the calls that would pull the context
+ * out from under the code that ran the callback: a nested refresh returns
+ * without doing anything, and osdp_file_register_ops() and osdp_cp_add_pd()
+ * fail. While teardown runs, the submit, flush and cancel calls and those two
+ * fail too, and a refresh does nothing. osdp_cp_teardown() and
+ * osdp_pd_teardown() must not be called from inside a callback of the context
+ * they tear down -- they free it under the code that ran the callback -- except
+ * from a completion that teardown itself fired, where the call does nothing.
  */
 OSDP_EXPORT
 void osdp_pd_refresh(osdp_t *ctx);
@@ -1983,41 +2013,58 @@ void osdp_pd_teardown(osdp_t *ctx);
 /**
  * @brief Set PD's capabilities
  *
+ * Setup only: call it before the first osdp_pd_refresh(); it returns -1
+ * afterwards, as a CP may already have read the capabilities.
+ *
  * @param ctx OSDP context
  * @param cap pointer to array of cap (`struct osdp_pd_cap`) terminated by a
  * capability with cap->function_code set to OSDP_PD_CAP_SENTINEL.
+ *
+ * @retval 0 on success
+ * @retval -1 when called after the first osdp_pd_refresh()
  */
 OSDP_EXPORT
-void osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap);
+int osdp_pd_set_capabilities(osdp_t *ctx, const struct osdp_pd_cap *cap);
 
 /**
  * @brief Set callback method for PD command notification. This callback is
  * invoked when the PD receives a command from the CP.
  *
+ * Setup only: call it before the first osdp_pd_refresh(); it returns -1
+ * afterwards.
+ *
  * @param ctx OSDP context
  * @param cb The callback function's pointer
  * @param arg A pointer that will be passed as the first argument of `cb`
+ *
+ * @retval 0 on success
+ * @retval -1 when called after the first osdp_pd_refresh()
  */
 OSDP_EXPORT
-void osdp_pd_set_command_callback(osdp_t *ctx, pd_command_callback_t cb,
-				  void *arg);
+int osdp_pd_set_command_callback(osdp_t *ctx, pd_command_callback_t cb,
+				 void *arg);
 
 /**
  * @brief Set callback method for PD event completion.
+ *
+ * Setup only: call it before the first osdp_pd_refresh(); it returns -1
+ * afterwards.
  *
  * @param ctx OSDP context
  * @param cb Callback function pointer
  * @param arg Opaque pointer passed as first callback argument
  *
+ * @retval 0 on success
+ * @retval -1 when called after the first osdp_pd_refresh()
+ *
  * @note Clearing this callback (passing NULL) while events are still queued
- * or in flight orphans them: their completions are dropped and the
- * application never gets them back. Unregister only after
- * osdp_pd_flush_events() or osdp_pd_teardown() has drained them.
+ * orphans them: their completions are dropped and the application never gets
+ * them back. Unregister only after osdp_pd_flush_events() has drained them.
  */
 OSDP_EXPORT
-void osdp_pd_set_event_completion_callback(osdp_t *ctx,
-					   pd_event_completion_callback_t cb,
-					   void *arg);
+int osdp_pd_set_event_completion_callback(osdp_t *ctx,
+					  pd_event_completion_callback_t cb,
+					  void *arg);
 
 /**
  * @brief Submit PD events to CP. These events are delivered to the CP as a
@@ -2045,6 +2092,10 @@ void osdp_pd_set_event_completion_callback(osdp_t *ctx,
  * @note Submission fails unless a completion callback is registered (see
  * osdp_pd_set_event_completion_callback()) -- the completion callback is how
  * ownership of the submitted event returns to the application.
+ *
+ * @note A card read in any format other than @c OSDP_CARD_FMT_RAW_UNSPECIFIED
+ * or @c OSDP_CARD_FMT_RAW_WIEGAND is rejected; LibOSDP does not support
+ * osdp_FMT.
  */
 OSDP_EXPORT
 int osdp_pd_submit_event(osdp_t *ctx, const struct osdp_event *event);
@@ -2082,13 +2133,20 @@ osdp_t *osdp_cp_setup(const struct osdp_channel *channel, int num_pd,
 /**
  * @brief Adds more PD devices in the CP control list.
  *
+ * This is part of setting up the CP: call it after osdp_cp_setup() and before
+ * the first osdp_cp_refresh(). Once the CP has been refreshed, its PD list is
+ * fixed and this call fails; use osdp_cp_disable_pd() and osdp_cp_enable_pd()
+ * to take PDs out of service and bring them back at runtime.
+ *
  * @param ctx OSDP context
  * @param num_pd Number of PDs connected to this CP. The `osdp_pd_info_t *` is
  * treated as an array of length num_pd.
  * @param info Pointer to info struct populated by application.
  *
  * @retval 0 on success
- * @retval -1 on failure
+ * @retval -1 on failure, including when called after the first
+ * osdp_cp_refresh(), from inside one of this context's callbacks or during its
+ * teardown (see osdp_cp_refresh())
  */
 OSDP_EXPORT
 int osdp_cp_add_pd(osdp_t *ctx, int num_pd, const osdp_pd_info_t *info);
@@ -2108,6 +2166,20 @@ int osdp_cp_add_pd(osdp_t *ctx, int num_pd, const osdp_pd_info_t *info);
  * getters are exempt: osdp_get_status_mask(), osdp_get_sc_status_mask(),
  * osdp_cp_get_pd_id() and osdp_get_file_tx_status() mutate nothing and may be
  * called concurrently -- see their notes.
+ *
+ * @note LibOSDP runs the application's callbacks -- channel, file ops,
+ * command, event, completion and log -- from inside osdp_cp_refresh(),
+ * osdp_pd_refresh(), the flush calls, teardown, and osdp_cp_submit_command()
+ * (which opens the file of an OSDP_CMD_FILE_TX it starts). From inside a
+ * callback, an application may submit, flush, cancel and query the context the
+ * callback belongs to. LibOSDP refuses the calls that would pull the context
+ * out from under the code that ran the callback: a nested refresh returns
+ * without doing anything, and osdp_file_register_ops() and osdp_cp_add_pd()
+ * fail. While teardown runs, the submit, flush and cancel calls and those two
+ * fail too, and a refresh does nothing. osdp_cp_teardown() and
+ * osdp_pd_teardown() must not be called from inside a callback of the context
+ * they tear down -- they free it under the code that ran the callback -- except
+ * from a completion that teardown itself fired, where the call does nothing.
  */
 OSDP_EXPORT
 void osdp_cp_refresh(osdp_t *ctx);
@@ -2249,7 +2321,7 @@ int osdp_cp_trs_scan_enable(osdp_t *ctx, int pd,
 
 /**
  * @brief Disable the background card presence scan on a PD. If a probe is
- * in flight, the reader is restored to its default mode first.
+ * in flight, the reader returns to its default mode on the next refresh.
  *
  * @param ctx OSDP context
  * @param pd PD offset (0-indexed) of this PD in `osdp_pd_info_t *` passed to
@@ -2335,29 +2407,36 @@ int osdp_cp_get_capability(const osdp_t *ctx, int pd, struct osdp_pd_cap *cap);
  * @brief Set callback method for CP event notification. This callback is
  * invoked when the CP receives an event from the PD.
  *
+ * Setup only: call it before the first osdp_cp_refresh(); it returns -1
+ * afterwards.
+ *
  * @param ctx OSDP context
  * @param cb The callback function's pointer
  * @param arg A pointer that will be passed as the first argument of `cb`
+ *
+ * @retval 0 on success
+ * @retval -1 when called after the first osdp_cp_refresh()
  */
 OSDP_EXPORT
-void osdp_cp_set_event_callback(osdp_t *ctx, cp_event_callback_t cb, void *arg);
+int osdp_cp_set_event_callback(osdp_t *ctx, cp_event_callback_t cb, void *arg);
 
 /**
  * @brief Set callback method for CP command completion.
+ *
+ * Setup only: call it before the first osdp_cp_refresh(); it returns -1
+ * afterwards.
  *
  * @param ctx OSDP context
  * @param cb Callback function pointer
  * @param arg Opaque pointer passed as first callback argument
  *
- * @note Clearing this callback (passing NULL) while commands are still queued
- * or in flight orphans them: their completions are dropped and the
- * application never gets them back. Unregister only after
- * osdp_cp_flush_commands() or osdp_cp_teardown() has drained them.
+ * @retval 0 on success
+ * @retval -1 when called after the first osdp_cp_refresh()
  */
 OSDP_EXPORT
-void osdp_cp_set_command_completion_callback(osdp_t *ctx,
-					     cp_command_completion_callback_t cb,
-					     void *arg);
+int osdp_cp_set_command_completion_callback(osdp_t *ctx,
+					    cp_command_completion_callback_t cb,
+					    void *arg);
 
 /**
  * @brief Set or clear OSDP public flags
@@ -2518,6 +2597,48 @@ const char *osdp_get_version();
 OSDP_EXPORT
 const char *osdp_get_source_info();
 
+/** @brief osdp_abi_info::options bit: built with OPT_OSDP_RX_ZERO_COPY */
+#define OSDP_ABI_OPT_RX_ZERO_COPY 0x00000001
+/** @brief osdp_abi_info::options bit: built with OPT_OSDP_LOG_MINIMAL */
+#define OSDP_ABI_OPT_LOG_MINIMAL 0x00000002
+/** @brief osdp_abi_info::options bit: built with OPT_BUILD_OSDP_TRS */
+#define OSDP_ABI_OPT_TRS 0x00000004
+
+/**
+ * @brief Binary interface of a LibOSDP build.
+ *
+ * Build options change the size of public structures (the `*_MAX_LEN`
+ * defaults) and their members (OPT_OSDP_RX_ZERO_COPY). Bindings that mirror
+ * these structures in another language compare this against their own layout
+ * before calling into the library.
+ *
+ * Fields are only ever appended. The caller sets @ref osdp_abi_info::size to
+ * the size it was compiled against; LibOSDP fills in at most that many bytes
+ * and writes back how many it filled, so an older caller is never overrun.
+ * Callers must set `size` to at least `sizeof(uint32_t)`; smaller values
+ * leave the struct partly or wholly unwritten.
+ *
+ * The sizes are a layout fingerprint for the shipped option set, not a proof
+ * that every `*_MAX_LEN` matches.
+ */
+struct osdp_abi_info {
+	uint32_t size; /**< In: caller's sizeof(struct osdp_abi_info); out: bytes filled */
+	uint32_t options; /**< OR of the OSDP_ABI_OPT_* bits */
+	uint32_t sizeof_cmd; /**< sizeof(struct osdp_cmd) */
+	uint32_t sizeof_event; /**< sizeof(struct osdp_event) */
+	uint32_t sizeof_channel; /**< sizeof(struct osdp_channel) */
+	uint32_t sizeof_pd_info; /**< sizeof(osdp_pd_info_t) */
+};
+
+/**
+ * @brief Describe the binary interface of this LibOSDP build.
+ *
+ * @param info caller sets info->size first; filled with this build's
+ *             structure sizes and options, up to info->size bytes
+ */
+OSDP_EXPORT
+void osdp_get_abi_info(struct osdp_abi_info *info);
+
 /**
  * @brief Get a bit mask of number of PD that are online currently.
  *
@@ -2582,9 +2703,18 @@ struct osdp_metrics {
 	 * these are NAKs received. Direction is implicit from the role.
 	 */
 	uint32_t nak_count;
-	/** Successful secure-channel activations (post-SCRYPT). */
+	/**
+	 * Successful secure-channel activations: counted when the session
+	 * becomes active (post-SCRYPT, on the RMAC_I a PD sends and a CP
+	 * accepts), not when a handshake starts.
+	 */
 	uint32_t sc_handshake_count;
-	/** Secure-channel tear-downs of a previously active session. */
+	/**
+	 * Secure-channel tear-downs of a previously active session, for any
+	 * reason: a bad MAC, a session timeout, a key change, a link reset,
+	 * or, on a CP, the PD going offline or being disabled. A handshake
+	 * that never completes counts in neither field.
+	 */
 	uint32_t sc_failure_count;
 	/** Commands processed at the application callback boundary. */
 	uint32_t command_count;
@@ -2657,6 +2787,9 @@ typedef int (*osdp_file_read_fn_t)(void *arg, void *buf, uint32_t size,
  * @retval Number of bytes written
  * @retval 0 on EOF
  * @retval -ve on errors.
+ *
+ * Writing fewer than @p size bytes ends the transfer: the PD answers the CP
+ * with the abort status of osdp_FTSTAT and closes the file.
  *
  * @note LibOSDP will guarantee that size and offset params are always
  * positive and size is always greater than or equal to offset.
@@ -2735,11 +2868,17 @@ struct osdp_file_ops {
  * @brief Register a global file operations struct with OSDP. Both CP and PD
  * modes should have done so already before CP can sending a OSDP_CMD_FILE_TX.
  *
+ * Setup only: call it before the first osdp_cp_refresh() or osdp_pd_refresh();
+ * it returns -1 afterwards. Swap files from inside the registered ops instead,
+ * keyed on the file ID that open() receives.
+ *
  * @param ctx OSDP context
  * @param pd PD number in case of CP. This param is ignored in PD mode
  * @param ops Populated file operations struct
  *
- * @retval 0 on success. -1 on errors.
+ * @retval 0 on success. -1 on errors, including when called after the first
+ * refresh, from inside one of this context's callbacks or during its teardown
+ * (see osdp_cp_refresh()).
  */
 OSDP_EXPORT
 int osdp_file_register_ops(osdp_t *ctx, int pd,

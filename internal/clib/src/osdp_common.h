@@ -54,7 +54,20 @@
  * the alias binds to fn by name (no signature can drift), costs no .data slot,
  * and adds no indirection at the call site.
  */
-#if defined(UNIT_TESTING) || defined(OSDP_UNIT_TESTABLE)
+#if (defined(UNIT_TESTING) || defined(OSDP_UNIT_TESTABLE)) && defined(__APPLE__)
+/*
+ * Mach-O has no alias attribute; assign the symbol in assembly instead. The
+ * pointer keeps a static fn emitted, since the assembler reference does not.
+ */
+#define OSDP_TEST_ALIAS_STR_(x) #x
+#define OSDP_TEST_ALIAS_SYM_(p, n) OSDP_TEST_ALIAS_STR_(p) #n
+#define OSDP_TEST_ALIAS_SYM(n) OSDP_TEST_ALIAS_SYM_(__USER_LABEL_PREFIX__, n)
+#define OSDP_TEST_ALIAS(fn)                                                    \
+	static __typeof__(fn) *const osdp_test_keep_##fn                       \
+		__attribute__((used)) = fn;                                    \
+	__asm__(".globl " OSDP_TEST_ALIAS_SYM(test_##fn) "\n"                \
+		OSDP_TEST_ALIAS_SYM(test_##fn) " = " OSDP_TEST_ALIAS_SYM(fn))
+#elif defined(UNIT_TESTING) || defined(OSDP_UNIT_TESTABLE)
 #define OSDP_TEST_ALIAS(fn)                                                    \
 	extern __typeof__(fn) test_##fn __attribute__((alias(#fn)))
 #else
@@ -262,6 +275,45 @@ static inline __noreturn void die()
 		}                                                              \
 	} while (0)
 
+/*
+ * Refresh, submit, flush and adding PDs run application callbacks -- the
+ * channel, file ops, command, event, completion and log callbacks -- which
+ * may call back into libosdp. A refresh from in there would recurse through
+ * the channel without bound, and swapping the file ops or growing the PD array
+ * would pull state out from under the code that called the callback, so refuse
+ * those three while any of them runs.
+ */
+#define input_check_not_running(_ctx)                                          \
+	do {                                                                   \
+		struct osdp *__ctx = (struct osdp *)_ctx;                      \
+		if (__ctx->running) {                                          \
+			LOG_PRINT("API called from inside a callback");        \
+			return -1;                                             \
+		}                                                              \
+	} while (0)
+
+/*
+ * Setup-only calls change what the refresh loop works on, so they are refused
+ * once the context has been refreshed.
+ */
+#define input_check_not_sealed(_ctx)                                           \
+	do {                                                                   \
+		struct osdp *__ctx = (struct osdp *)_ctx;                      \
+		if (__ctx->sealed) {                                           \
+			LOG_PRINT("Setup-only API called after refresh");      \
+			return -1;                                             \
+		}                                                              \
+	} while (0)
+
+#define input_check_not_running_noret(_ctx)                                    \
+	do {                                                                   \
+		struct osdp *__ctx = (struct osdp *)_ctx;                      \
+		if (__ctx->running) {                                          \
+			LOG_PRINT("API called from inside a callback");        \
+			return;                                                \
+		}                                                              \
+	} while (0)
+
 /**
  * @brief OSDP reserved commands
  */
@@ -308,7 +360,7 @@ static inline __noreturn void die()
 #define REPLY_OSTATR	0x4A
 #define REPLY_RSTATR	0x4B
 #define REPLY_RAW	0x50
-#define REPLY_FMT	0x51 /* deprecated */
+#define REPLY_FMT	0x51 /* unsupported; see issue #206 */
 #define REPLY_KEYPAD	0x53
 #define REPLY_COM	0x54
 #define REPLY_BIOREADR	0x57
@@ -723,6 +775,8 @@ struct osdp {
 	uint32_t _magic; /* Canary to be used in input_check() */
 	int _num_pd; /* Number of PDs attached to this context */
 	bool tearing_down; /* set by teardown; public API refuses while set */
+	bool running; /* inside refresh, submit, flush or add_pd */
+	bool sealed; /* set by the first refresh; setup-only calls refuse */
 	struct osdp_pd *_current_pd; /* current operational pd's pointer */
 	struct osdp_pd *pd; /* base of PD list (must be at lest one) */
 	struct osdp_channel channel; /* OSDP channel */
@@ -794,6 +848,10 @@ const char *osdp_reply_name(int reply_id);
  * OFFLINE/DISABLED, PD losing the CP, CMD_ABORT) instead of listing engines
  * at the call site. Each engine's abort is idempotent. */
 void osdp_engines_abort(struct osdp_pd *pd);
+
+/* Point this PD's feature engines back at it after the PD array has moved;
+ * they report progress and completion against the PD they were opened on. */
+void osdp_engines_rebind(struct osdp_pd *pd);
 
 /* Any multi-part engine mid-transfer on this PD? §5.10.2 forbids interleaving
  * multi-part transfers; every engine's submit path must check this. */
@@ -998,20 +1056,8 @@ static inline bool sc_is_active(struct osdp_pd *pd)
 	return ISSET_FLAG(pd, PD_FLAG_SC_ACTIVE);
 }
 
-static inline void sc_activate(struct osdp_pd *pd)
-{
-	SET_FLAG(pd, PD_FLAG_SC_ACTIVE);
-}
-
-static inline void sc_deactivate(struct osdp_pd *pd)
-{
-	if (sc_is_active(pd)) {
-		osdp_sc_teardown(pd);
-	}
-	CLEAR_FLAG(pd, PD_FLAG_SC_ACTIVE);
-	/* Cached retransmit reply is no longer meaningful without SC. */
-	pd->last_tx_len = 0;
-}
+void sc_activate(struct osdp_pd *pd);
+void sc_deactivate(struct osdp_pd *pd);
 
 static inline bool is_pd_online(struct osdp_pd *pd)
 {

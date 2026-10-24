@@ -40,7 +40,11 @@ static int file_mp_write(void *arg, const void *buf, uint32_t size,
 	int n = f->ops.write(f->ops.arg, buf, size, offset);
 
 	/* A short write is fatal; file transfer does not use RETRY. */
-	return (n == (int)size) ? OSDP_MP_RX_OK : OSDP_MP_RX_ABORT;
+	if (n != (int)size) {
+		f->write_failed = true;
+		return OSDP_MP_RX_ABORT;
+	}
+	return OSDP_MP_RX_OK;
 }
 
 static inline void file_state_reset(struct osdp_pd *pd)
@@ -53,6 +57,7 @@ static inline void file_state_reset(struct osdp_pd *pd)
 	f->errors = 0;
 	f->is_open = false;
 	f->keep_alive_pending = false;
+	f->write_failed = false;
 	f->finalize_tstamp = 0;
 	f->file_id = 0;
 	f->in_terminal = false;
@@ -257,12 +262,14 @@ int osdp_file_cmd_stat_decode(struct osdp_pd *pd, uint8_t *buf, int len)
 	osdp_mp_set_wait(&f->mp, stat.delay);
 
 	if (stat.status < 0) {
+		/* The PD gave up on the transfer and told us so; the reply
+		 * itself is fine, so the link stays up. */
 		LOG_ERR("Stat_Decode: File transfer error; "
 			"status:%d offset:%" PRIu32,
 			stat.status, f->mp.offset);
 		file_transition_done(
 			pd, file_outcome_from_wire_status(stat.status));
-		return -1;
+		return 0;
 	}
 
 	if (f->mp.offset != f->mp.total) {
@@ -362,6 +369,13 @@ int osdp_file_cmd_tx_decode(struct osdp_pd *pd, uint8_t *buf, int len)
 	 * at the frame's declared offset and enforces the offset/length
 	 * bounds against the declared total. */
 	mrc = osdp_mp_rx_consume(&f->mp, buf + 1, len - 1);
+	if (mrc == OSDP_MP_RC_ERR && f->write_failed) {
+		/* The frame was fine, we just could not store it; that ends
+		 * the transfer, which osdp_file_cmd_stat_build() reports. */
+		LOG_ERR("TX_Decode: write failed at off:%" PRIu32,
+			f->mp.offset);
+		return 0;
+	}
 	if (mrc == OSDP_MP_RC_ERR) {
 		LOG_ERR("TX_Decode: engine rejected frame at off:%" PRIu32,
 			f->mp.offset);
@@ -420,6 +434,12 @@ int osdp_file_cmd_stat_build(struct osdp_pd *pd, uint8_t *buf, int max_len)
 		LOG_ERR("Stat_Build: insufficient space; need:%zu have:%d",
 			sizeof(struct osdp_cmd_file_stat), max_len);
 		return -1;
+	}
+
+	if (f->write_failed) {
+		stat.status = OSDP_FILE_TX_STATUS_ERR_ABORT;
+		file_transition_done(pd, OSDP_MP_OUTCOME_ABORTED);
+		goto serialize;
 	}
 
 	if (f->keep_alive_pending) {
@@ -582,6 +602,9 @@ int osdp_file_tx_command(struct osdp_pd *pd, int file_id, uint32_t flags)
 
 	if (size == 0) {
 		LOG_ERR("TX_init: Invalid file size %" PRIu32, size);
+		if (f->ops.close(f->ops.arg) < 0) {
+			LOG_ERR("TX_init: File close failed; continuing");
+		}
 		return -1;
 	}
 
@@ -619,6 +642,9 @@ int osdp_file_register_ops(osdp_t *ctx, int pd_idx,
 			   const struct osdp_file_ops *ops)
 {
 	input_check(ctx, pd_idx);
+	input_check_not_tearing_down(ctx);
+	input_check_not_running(ctx);
+	input_check_not_sealed(ctx);
 	struct osdp_pd *pd = osdp_to_pd(ctx, pd_idx);
 
 	if (!pd->file) {
@@ -637,14 +663,6 @@ int osdp_file_register_ops(osdp_t *ctx, int pd_idx,
 			return -1;
 		}
 #endif
-	}
-
-	if (osdp_file_tx_is_active(pd)) {
-		/* Resetting under a live transfer orphans the command the
-		 * engine holds; end it properly first. Done before the ops are
-		 * swapped so the open file is closed by the ops that opened
-		 * it. */
-		osdp_file_tx_abort(pd);
 	}
 
 	memcpy(&pd->file->ops, ops, sizeof(struct osdp_file_ops));

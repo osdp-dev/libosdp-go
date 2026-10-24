@@ -33,7 +33,7 @@ type EventData interface {
 type EventCardRead struct {
 	ReaderNo  int32
 	Format    OsdpCardFormat
-	Direction bool
+	Direction bool // reverse read; only osdp_FMT carries it, so always false
 	NrBits    uint32
 	Data      []byte
 }
