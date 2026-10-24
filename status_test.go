@@ -87,7 +87,8 @@ func TestStatusAndMfgCommands(t *testing.T) {
 			{Function: osdp.CapContactStatusMonitoring, Compliance: 1, NumItems: 2},
 		}
 
-		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = capabilities
+		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, osdp.LogInfo)
 		if err != nil {
 			t.Errorf("Failed to create PD: %v", err)
 			return
@@ -246,7 +247,8 @@ func TestSecureChannel(t *testing.T) {
 			{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
 		}
 
-		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = capabilities
+		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, osdp.LogInfo)
 		if err != nil {
 			t.Errorf("Failed to create PD: %v", err)
 			return
@@ -417,8 +419,8 @@ func TestCompletionCallbacksAndMetrics(t *testing.T) {
 	defer pdChannel.Close()
 
 	pd, err := osdp.NewPeripheralDevice(pdChannel,
-		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id},
-		[]osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}},
+		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id,
+			Capabilities: []osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}}},
 		osdp.LogError)
 	if err != nil {
 		t.Fatalf("NewPeripheralDevice: %v", err)

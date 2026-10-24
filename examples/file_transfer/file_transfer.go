@@ -300,6 +300,7 @@ func runCP(channel *osdp.FIFOChannel, fileID int, sigChan chan os.Signal) {
 		ID: osdp.PdId{
 			Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345,
 		},
+		FileOperations: fileOps,
 	}
 
 	// Create CP
@@ -313,11 +314,6 @@ func runCP(channel *osdp.FIFOChannel, fileID int, sigChan chan os.Signal) {
 	err = cp.SetEventHandler(eventHandler)
 	if err != nil {
 		log.Fatalf("Failed to set event handler: %v", err)
-	}
-
-	// Register file operations
-	if err := cp.RegisterFileOperations(0, fileOps); err != nil {
-		log.Fatalf("Failed to register file operations: %v", err)
 	}
 
 	fmt.Printf("CP: Registered file operations, waiting for PD connection...\n")
@@ -405,15 +401,14 @@ func runPD(channel *osdp.FIFOChannel, fileID int, sigChan chan os.Signal) {
 			Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345,
 			FirmwareMajor: 1, FirmwareMinor: 0, FirmwareBuild: 1,
 		},
-	}
-
-	// Create capabilities
-	capabilities := []osdp.PdCapability{
-		{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 1},
+		Capabilities: []osdp.PdCapability{
+			{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 1},
+		},
+		FileOperations: fileOps,
 	}
 
 	// Create PD
-	pd, err := osdp.NewPeripheralDevice(channel, pdInfo, capabilities, osdp.LogInfo)
+	pd, err := osdp.NewPeripheralDevice(channel, pdInfo, osdp.LogInfo)
 	if err != nil {
 		log.Fatalf("Failed to create PD: %v", err)
 	}
@@ -424,11 +419,6 @@ func runPD(channel *osdp.FIFOChannel, fileID int, sigChan chan os.Signal) {
 		log.Fatalf("Failed to set command handler: %v", err)
 	}
 	defer pd.Stop()
-
-	// Register file operations
-	if err := pd.RegisterFileOperations(fileOps); err != nil {
-		log.Fatalf("Failed to register file operations: %v", err)
-	}
 
 	fmt.Printf("PD: Ready to receive files. File operations registered.\n")
 	fmt.Println("Waiting for file transfer commands from CP...")

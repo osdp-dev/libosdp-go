@@ -120,7 +120,8 @@ func main() {
 		}
 
 		// Create PD
-		pds[i], err = osdp.NewPeripheralDevice(channels[i], pdInfo, config.Capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = config.Capabilities
+		pds[i], err = osdp.NewPeripheralDevice(channels[i], pdInfo, osdp.LogInfo)
 		if err != nil {
 			log.Fatalf("Failed to create %s: %v", config.Name, err)
 		}

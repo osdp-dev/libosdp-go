@@ -130,7 +130,8 @@ func main() {
 	}
 
 	// Create Peripheral Device
-	pd, err := osdp.NewPeripheralDevice(channel, pdInfo, capabilities, osdp.LogInfo)
+	pdInfo.Capabilities = capabilities
+	pd, err := osdp.NewPeripheralDevice(channel, pdInfo, osdp.LogInfo)
 	if err != nil {
 		log.Fatalf("Failed to create Peripheral Device: %v", err)
 	}

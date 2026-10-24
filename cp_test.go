@@ -45,9 +45,12 @@ func TestGetPDIDReturnsIdentityReportedByPD(t *testing.T) {
 }
 
 func TestSetFlagEnablesNotificationsAtRuntime(t *testing.T) {
-	cp, pd, _ := startOnlinePair(t, 0)
-	pd.RegisterFileOperations(newMemFile(1, nil))
-	cp.RegisterFileOperations(0, newMemFile(1, make([]byte, 64)))
+	link := newFIFOLink(t)
+	startTestPD(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(1, nil)), nil)
+	cp := startTestCP(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(1, make([]byte, 64))))
+	if !cp.OnlineWait(0, 10*time.Second) {
+		t.Fatal("PD did not come online")
+	}
 	started := make(chan osdp.NotificationMP, 4)
 	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
 		if n, ok := ev.Event.(osdp.EventNotification); ok && n.Type == osdp.NotificationTypeMPStart {
@@ -296,7 +299,8 @@ func TestBasicCPPDCommunication(t *testing.T) {
 		}
 
 		// Create PD
-		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = capabilities
+		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, osdp.LogInfo)
 		if err != nil {
 			t.Errorf("Failed to create PD: %v", err)
 			return

@@ -61,7 +61,8 @@ type ControlPanel struct {
 }
 
 // ControlPanelBuilder collects the PDs on one OSDP bus and builds the
-// ControlPanel that drives them. The PD list is fixed once the CP is built.
+// ControlPanel that drives them. The PD list and each PD's FileOperations are
+// fixed once the CP is built.
 type ControlPanelBuilder struct {
 	channel  Channel
 	pdInfos  []*PdInfo
@@ -145,6 +146,16 @@ func (b *ControlPanelBuilder) Build() (*ControlPanel, error) {
 		freeCChannel(cp.channel)
 		cp.channel = nil
 		return nil, fmt.Errorf("failed to create OSDP CP context")
+	}
+	for i, info := range pdInfoList {
+		if info.FileOperations == nil {
+			continue
+		}
+		if err := registerFileOperations(cp.ctx, i, info.FileOperations); err != nil {
+			C.osdp_cp_teardown(unsafe.Pointer(cp.ctx))
+			freeCChannel(cp.channel)
+			return nil, fmt.Errorf("PD %d: %w", i, err)
+		}
 	}
 
 	// Register this CP against an opaque handle and wire the C callbacks up

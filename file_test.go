@@ -76,17 +76,9 @@ func TestFileTransferDeliversFileToPD(t *testing.T) {
 	}
 
 	link := newFIFOLink(t)
-	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
 	rx := newMemFile(3, nil)
-	if err := pd.RegisterFileOperations(rx); err != nil {
-		t.Fatalf("PD RegisterFileOperations: %v", err)
-	}
-
-	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode))
-	tx := newMemFile(3, payload)
-	if err := cp.RegisterFileOperations(0, tx); err != nil {
-		t.Fatalf("CP RegisterFileOperations: %v", err)
-	}
+	startTestPD(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), rx), nil)
+	cp := startTestCP(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(3, payload)))
 	if !cp.OnlineWait(0, 10*time.Second) {
 		t.Fatal("PD did not come online")
 	}
@@ -108,11 +100,8 @@ func TestFileTransferDeliversFileToPD(t *testing.T) {
 func TestFileTransferStatusReportsProgress(t *testing.T) {
 	payload := make([]byte, 20000)
 	link := newFIFOLink(t)
-	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
-	rx := newMemFile(1, nil)
-	pd.RegisterFileOperations(rx)
-	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode))
-	cp.RegisterFileOperations(0, newMemFile(1, payload))
+	pd := startTestPD(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(1, nil)), nil)
+	cp := startTestCP(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(1, payload)))
 	if !cp.OnlineWait(0, 10*time.Second) {
 		t.Fatal("PD did not come online")
 	}
@@ -135,10 +124,9 @@ func TestFileTransferStatusReportsProgress(t *testing.T) {
 
 func TestCancelAbortsFileTransfer(t *testing.T) {
 	link := newFIFOLink(t)
-	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
-	pd.RegisterFileOperations(newMemFile(1, nil))
-	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode|osdp.FlagEnableNotification))
-	cp.RegisterFileOperations(0, newMemFile(1, make([]byte, 1<<20)))
+	startTestPD(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(1, nil)), nil)
+	cp := startTestCP(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode|osdp.FlagEnableNotification),
+		newMemFile(1, make([]byte, 1<<20))))
 
 	outcome := make(chan osdp.MPOutcome, 1)
 	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
@@ -211,12 +199,8 @@ func (f *finalizingFile) Finalize() (bool, osdp.MPOutcome, time.Duration) {
 func transferWithFinalizer(t *testing.T, rx *finalizingFile) osdp.CompletionStatus {
 	t.Helper()
 	link := newFIFOLink(t)
-	pd := startTestPD(t, link, testPdInfo(osdp.FlagInstallMode), nil)
-	if err := pd.RegisterFileOperations(rx); err != nil {
-		t.Fatalf("PD RegisterFileOperations: %v", err)
-	}
-	cp := startTestCP(t, link, testPdInfo(osdp.FlagInstallMode))
-	cp.RegisterFileOperations(0, newMemFile(1, make([]byte, 500)))
+	startTestPD(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), rx), nil)
+	cp := startTestCP(t, link, withFileOps(testPdInfo(osdp.FlagInstallMode), newMemFile(1, make([]byte, 500))))
 	completed := make(chan osdp.CompletionStatus, 1)
 	cp.SetCommandCompletionHandler(func(_ int, cmd *osdp.Command, st osdp.CompletionStatus) {
 		if cmd.Command.GetType() == osdp.CmdFileTx {

@@ -34,8 +34,8 @@ func TestCommandTextEmbeddedNUL(t *testing.T) {
 	defer pdChannel.Close()
 
 	pd, err := osdp.NewPeripheralDevice(pdChannel,
-		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id},
-		[]osdp.PdCapability{{Function: osdp.CapReaderTextOutput, Compliance: 1, NumItems: 1}},
+		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id,
+			Capabilities: []osdp.PdCapability{{Function: osdp.CapReaderTextOutput, Compliance: 1, NumItems: 1}}},
 		osdp.LogError)
 	if err != nil {
 		t.Fatalf("NewPeripheralDevice: %v", err)
@@ -139,7 +139,8 @@ func TestMultipleCommands(t *testing.T) {
 			{Function: osdp.CapReaderTextOutput, Compliance: 1, NumItems: 1},
 		}
 
-		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = capabilities
+		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, osdp.LogInfo)
 		if err != nil {
 			t.Errorf("Failed to create PD: %v", err)
 			return
@@ -296,7 +297,8 @@ func TestComprehensiveLEDColors(t *testing.T) {
 			{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 4},
 		}
 
-		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = capabilities
+		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, osdp.LogInfo)
 		if err != nil {
 			t.Errorf("Failed to create PD: %v", err)
 			return

@@ -63,6 +63,12 @@ func testPdInfo(flags osdp.OsdpFlag) *osdp.PdInfo {
 	}
 }
 
+// withFileOps sets info's FileOperations and returns info.
+func withFileOps(info *osdp.PdInfo, ops osdp.FileOperations) *osdp.PdInfo {
+	info.FileOperations = ops
+	return info
+}
+
 // startTestPD creates a PD on link and stops it when the test ends. Set
 // handlers before calling startTestCP so nothing the CP triggers is missed.
 func startTestPD(t *testing.T, link fifoLink, info *osdp.PdInfo, caps []osdp.PdCapability) *osdp.PeripheralDevice {
@@ -72,7 +78,10 @@ func startTestPD(t *testing.T, link fifoLink, info *osdp.PdInfo, caps []osdp.PdC
 		t.Fatalf("PD channel: %v", err)
 	}
 	t.Cleanup(func() { ch.Close() })
-	pd, err := osdp.NewPeripheralDevice(ch, info, caps, osdp.LogWarning)
+	if caps != nil {
+		info.Capabilities = caps
+	}
+	pd, err := osdp.NewPeripheralDevice(ch, info, osdp.LogWarning)
 	if err != nil {
 		t.Fatalf("NewPeripheralDevice: %v", err)
 	}

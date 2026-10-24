@@ -188,9 +188,9 @@ func TestFlushEventsDropsQueuedEvents(t *testing.T) {
 	}
 }
 
-// TestPDSetCapabilitiesAndMetrics checks the PD-side parity additions that do
-// not require an established link.
-func TestPDSetCapabilitiesAndMetrics(t *testing.T) {
+// TestPDMetricsWithoutLink checks the PD getters that do not require an
+// established link.
+func TestPDMetricsWithoutLink(t *testing.T) {
 	_, _, pdRx, pdTx, cleanup := createFIFOPair(t)
 	defer cleanup()
 
@@ -203,18 +203,11 @@ func TestPDSetCapabilitiesAndMetrics(t *testing.T) {
 	pd, err := osdp.NewPeripheralDevice(ch,
 		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode,
 			ID: osdp.PdId{Version: 1, Model: 1, VendorCode: 0x153, SerialNumber: 0x12345, FirmwareMajor: 1}},
-		nil, osdp.LogError)
+		osdp.LogError)
 	if err != nil {
 		t.Fatalf("NewPeripheralDevice: %v", err)
 	}
 	defer pd.Stop()
-
-	if err := pd.SetCapabilities([]osdp.PdCapability{
-		{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2},
-		{Function: osdp.CapReaderAudibleOutput, Compliance: 1, NumItems: 1},
-	}); err != nil {
-		t.Errorf("SetCapabilities: %v", err)
-	}
 
 	if _, err := pd.GetMetrics(); err != nil {
 		t.Errorf("PD GetMetrics: %v", err)
@@ -225,8 +218,8 @@ func TestPDSetCapabilitiesAndMetrics(t *testing.T) {
 }
 
 // TestPdInfoCapabilitiesAdvertised verifies that capabilities set on
-// PdInfo.Capabilities (with no explicit capabilities argument) are advertised by
-// the PD and discoverable by the CP via GetPDCapability.
+// PdInfo.Capabilities are advertised by the PD and discoverable by the CP via
+// GetPDCapability.
 func TestPdInfoCapabilitiesAdvertised(t *testing.T) {
 	cpRx, cpTx, pdRx, pdTx, cleanup := createFIFOPair(t)
 	defer cleanup()
@@ -239,13 +232,11 @@ func TestPdInfoCapabilitiesAdvertised(t *testing.T) {
 	}
 	defer pdChannel.Close()
 
-	// Capabilities live ONLY on PdInfo.Capabilities; the explicit argument is nil.
 	pd, err := osdp.NewPeripheralDevice(pdChannel,
 		&osdp.PdInfo{
 			Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id,
 			Capabilities: []osdp.PdCapability{{Function: osdp.CapOutputControl, Compliance: 1, NumItems: 4}},
 		},
-		nil,
 		osdp.LogError)
 	if err != nil {
 		t.Fatalf("NewPeripheralDevice: %v", err)

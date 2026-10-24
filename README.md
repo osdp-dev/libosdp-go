@@ -83,9 +83,8 @@ func main() {
 ### Peripheral Device
 
 ```go
-pd, err := osdp.NewPeripheralDevice(channel, pdInfo,
-	[]osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}},
-	osdp.LogInfo)
+pdInfo.Capabilities = []osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}}
+pd, err := osdp.NewPeripheralDevice(channel, pdInfo, osdp.LogInfo)
 if err != nil {
 	log.Fatal(err)
 }

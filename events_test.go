@@ -99,7 +99,8 @@ func TestEventGeneration(t *testing.T) {
 			{Function: osdp.CapOutputControl, Compliance: 1, NumItems: 1},
 		}
 
-		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, capabilities, osdp.LogInfo)
+		pdInfo.Capabilities = capabilities
+		pd, err := osdp.NewPeripheralDevice(pdChannel, pdInfo, osdp.LogInfo)
 		if err != nil {
 			t.Errorf("Failed to create PD: %v", err)
 			return
@@ -193,8 +194,8 @@ func TestMfgReplyLargePayload(t *testing.T) {
 	defer pdChannel.Close()
 
 	pd, err := osdp.NewPeripheralDevice(pdChannel,
-		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id},
-		[]osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}},
+		&osdp.PdInfo{Address: 1, BaudRate: 9600, Flags: osdp.FlagInstallMode, ID: id,
+			Capabilities: []osdp.PdCapability{{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 2}}},
 		osdp.LogError)
 	if err != nil {
 		t.Fatalf("NewPeripheralDevice: %v", err)
@@ -249,24 +250,22 @@ func TestCPNotificationsDecodeOverTheWire(t *testing.T) {
 	link := newFIFOLink(t)
 	pdInfo := testPdInfo(osdp.FlagInstallMode)
 	pdInfo.ID = osdp.PdId{Version: 3, Model: 7, VendorCode: 0x0A0B0C, SerialNumber: 0xCAFE, FirmwareMajor: 2, FirmwareMinor: 1, FirmwareBuild: 9}
-	pd := startTestPD(t, link, pdInfo, []osdp.PdCapability{
+	startTestPD(t, link, withFileOps(pdInfo, newMemFile(5, nil)), []osdp.PdCapability{
 		{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
 	})
-	pd.RegisterFileOperations(newMemFile(5, nil))
 
 	notes := make(chan osdp.NotificationData, 32)
 	// The CP holds an SCBK, so it first opens SC on the install key (SCBK-D)
 	// to provision the PD.
 	cpInfo := testPdInfo(osdp.FlagInstallMode | osdp.FlagEnableNotification)
 	cpInfo.SCBK, _ = osdp.GenKey(16)
-	cp := startTestCP(t, link, cpInfo)
+	cp := startTestCP(t, link, withFileOps(cpInfo, newMemFile(5, make([]byte, 300))))
 	cp.SetEventHandler(func(_ int, ev *osdp.Event) int {
 		if n, ok := ev.Event.(osdp.EventNotification); ok {
 			notes <- n.Payload
 		}
 		return 0
 	})
-	cp.RegisterFileOperations(0, newMemFile(5, make([]byte, 300)))
 
 	want := map[string]osdp.NotificationData{
 		"link":     osdp.NotificationPDStatus{Online: true},

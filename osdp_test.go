@@ -32,13 +32,14 @@ func TestGetVersionIsResolvedSemver(t *testing.T) {
 // Header identifiers that are deliberately not bound, with the reason. Enum
 // *_SENTINEL members are skipped wholesale.
 var unboundByDesign = map[string]string{
-	"OSDP_EXPORT":            "symbol visibility macro",
-	"OSDP_DEPRECATED_EXPORT": "symbol visibility macro",
-	"OSDP_LOG_MAX_LEVEL":     "enum bound marker, not a level",
-	"OSDP_PD_CAP_UNUSED":     "placeholder function code 0",
-	"OSDP_PD_ONLINE_TOUT_MS": "internal timing constant, documentation only",
-	"osdp_logger_init":       "would replace the callback that routes logs to SetLogHandler",
-	"osdp_cp_add_pd":         "ControlPanelBuilder hands every PD to osdp_cp_setup",
+	"OSDP_EXPORT":              "symbol visibility macro",
+	"OSDP_DEPRECATED_EXPORT":   "symbol visibility macro",
+	"OSDP_LOG_MAX_LEVEL":       "enum bound marker, not a level",
+	"OSDP_PD_CAP_UNUSED":       "placeholder function code 0",
+	"OSDP_PD_ONLINE_TOUT_MS":   "internal timing constant, documentation only",
+	"osdp_logger_init":         "would replace the callback that routes logs to SetLogHandler",
+	"osdp_cp_add_pd":           "ControlPanelBuilder hands every PD to osdp_cp_setup",
+	"osdp_pd_set_capabilities": "PdInfo.Capabilities reaches libosdp through osdp_pd_setup",
 }
 
 var cComment = regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`)

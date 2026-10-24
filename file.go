@@ -65,55 +65,10 @@ func fileOpsLookup(handle uintptr) (FileOperations, bool) {
 	return ops, ok
 }
 
-// RegisterFileOperations registers file operations for file transfer
-func (cp *ControlPanel) RegisterFileOperations(pdNumber int, fileOps FileOperations) error {
-	if pdNumber < 0 || pdNumber >= len(cp.pdInfoList) {
-		return fmt.Errorf("invalid PD number: %d", pdNumber)
-	}
-
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
-	if cp.ctx == nil {
-		return fmt.Errorf("control panel context is not initialized")
-	}
-
-	fileOpsMu.Lock()
-	fileOpsCounter++
-	handle := fileOpsCounter
-	fileOpsRegistry[handle] = fileOps
-	fileOpsMu.Unlock()
-
-	// libosdp copies the ops struct, so it only needs to outlive the call.
-	// calloc leaves optional ops this binding does not set (finalize) NULL.
-	cFileOps := (*C.struct_osdp_file_ops)(C.calloc(1, C.size_t(unsafe.Sizeof(C.struct_osdp_file_ops{}))))
-	defer C.free(unsafe.Pointer(cFileOps))
-	cFileOps.arg = handlePtr(handle)
-	cFileOps.open = (*[0]byte)(C.fileOpenWrapper)
-	cFileOps.read = (*[0]byte)(C.fileReadWrapper)
-	cFileOps.write = (*[0]byte)(C.fileWriteWrapper)
-	cFileOps.close = (*[0]byte)(C.fileCloseWrapper)
-
-	ret := C.osdp_file_register_ops(unsafe.Pointer(cp.ctx), C.int(pdNumber), cFileOps)
-	if ret != 0 {
-		fileOpsMu.Lock()
-		delete(fileOpsRegistry, handle)
-		fileOpsMu.Unlock()
-		return fmt.Errorf("failed to register file operations, error code: %d", ret)
-	}
-
-	return nil
-}
-
-// RegisterFileOperationsPD registers file operations for PD file transfer
-func (pd *PeripheralDevice) RegisterFileOperations(fileOps FileOperations) error {
-	pd.mu.Lock()
-	defer pd.mu.Unlock()
-
-	if pd.ctx == nil {
-		return fmt.Errorf("peripheral device context is not initialized")
-	}
-
+// registerFileOperations hands fileOps to libosdp: on a CP for the PD at
+// pdNumber, on a PD for itself (pdNumber is ignored). libosdp only accepts them
+// before the context's first refresh.
+func registerFileOperations(ctx *C.osdp_t, pdNumber int, fileOps FileOperations) error {
 	fileOpsMu.Lock()
 	fileOpsCounter++
 	handle := fileOpsCounter
@@ -133,7 +88,7 @@ func (pd *PeripheralDevice) RegisterFileOperations(fileOps FileOperations) error
 		cFileOps.finalize = (*[0]byte)(C.fileFinalizeWrapper)
 	}
 
-	ret := C.osdp_file_register_ops(unsafe.Pointer(pd.ctx), 0, cFileOps)
+	ret := C.osdp_file_register_ops(unsafe.Pointer(ctx), C.int(pdNumber), cFileOps)
 	if ret != 0 {
 		fileOpsMu.Lock()
 		delete(fileOpsRegistry, handle)

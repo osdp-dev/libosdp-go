@@ -62,7 +62,8 @@ func startPD(l link, info *osdp.PdInfo, handler osdp.CommandHandler) *osdp.Perip
 	if err != nil {
 		log.Fatal(err)
 	}
-	pd, err := osdp.NewPeripheralDevice(ch, info, pdCaps, osdp.LogWarning)
+	info.Capabilities = pdCaps
+	pd, err := osdp.NewPeripheralDevice(ch, info, osdp.LogWarning)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -33,7 +33,7 @@ func Example() {
 	}
 
 	pdChannel, _ := osdp.NewFIFOChannel(toPD, toCP)
-	pd, err := osdp.NewPeripheralDevice(pdChannel, info, nil, osdp.LogInfo)
+	pd, err := osdp.NewPeripheralDevice(pdChannel, info, osdp.LogInfo)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -120,7 +120,8 @@ func ExampleNewPeripheralDevice() {
 		{Function: osdp.CapReaderLEDControl, Compliance: 1, NumItems: 1},
 		{Function: osdp.CapCommunicationSecurity, Compliance: 1, NumItems: 1},
 	}
-	pd, err := osdp.NewPeripheralDevice(channel, info, caps, osdp.LogInfo)
+	info.Capabilities = caps
+	pd, err := osdp.NewPeripheralDevice(channel, info, osdp.LogInfo)
 	if err != nil {
 		log.Fatal(err)
 	}

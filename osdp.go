@@ -126,7 +126,10 @@ type PdInfo struct {
 	Flags        OsdpFlag
 	SCBK         []byte // Secure Channel Base Key (16 bytes)
 	ID           PdId
-	Capabilities []PdCapability
+	Capabilities []PdCapability // advertised by a PD; ignored by a CP
+	// FileOperations, if set, is the source of the files a CP sends to this PD,
+	// or where a PD stores the files it receives.
+	FileOperations FileOperations
 }
 
 // PdId represents PD identification information
@@ -154,8 +157,7 @@ type PdCapability struct {
 // libosdp copies these inputs into its own context.
 //
 // Capabilities are populated from p.Capabilities. libosdp uses cInfo.cap only in
-// PD mode; on the CP side it is ignored. NewPeripheralDevice may override
-// cInfo.cap with an explicitly-supplied capability argument.
+// PD mode; on the CP side it is ignored.
 func (p *PdInfo) asCStruct() (C.osdp_pd_info_t, func()) {
 	var cInfo C.osdp_pd_info_t
 	frees := []unsafe.Pointer{}

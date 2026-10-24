@@ -48,7 +48,6 @@ type PeripheralDevice struct {
 	ctx                    *C.osdp_t
 	handle                 uintptr
 	pdInfo                 *PdInfo
-	capabilities           []PdCapability
 	commandHandler         CommandHandler
 	eventCompletionHandler EventCompletionHandler
 	refreshContext         *refreshLoop
@@ -68,9 +67,10 @@ type PeripheralDevice struct {
 }
 
 // NewPeripheralDevice creates a new Peripheral Device instance.
-// channel is the bus this PD is attached to. The PD starts serving the bus
-// before this returns; call Stop to shut it down.
-func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapability, logLevel LogLevel) (*PeripheralDevice, error) {
+// channel is the bus this PD is attached to. pdInfo's Capabilities and
+// FileOperations are fixed from here on. The PD starts serving the bus before
+// this returns; call Stop to shut it down.
+func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, logLevel LogLevel) (*PeripheralDevice, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is required")
 	}
@@ -80,7 +80,6 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 
 	pd := &PeripheralDevice{
 		pdInfo:        pdInfo,
-		capabilities:  capabilities,
 		commandQueue:  make(chan *Command, 100),
 		pendingEvents: make(map[*C.struct_osdp_event]struct{}),
 		refreshContext: &refreshLoop{
@@ -94,33 +93,21 @@ func NewPeripheralDevice(channel Channel, pdInfo *PdInfo, capabilities []PdCapab
 
 	pd.channel = newCChannel(channel)
 
-	cInfo, scbkCleanup := pdInfo.asCStruct()
-	defer scbkCleanup()
-
-	var capArrayPtr *C.struct_osdp_pd_cap
-	if len(capabilities) > 0 {
-		capCount := len(capabilities) + 1
-		capArrayPtr = (*C.struct_osdp_pd_cap)(C.malloc(C.size_t(capCount) * C.size_t(unsafe.Sizeof(C.struct_osdp_pd_cap{}))))
-		defer C.free(unsafe.Pointer(capArrayPtr))
-		capArray := (*[1 << 30]C.struct_osdp_pd_cap)(unsafe.Pointer(capArrayPtr))
-
-		for i, cap := range capabilities {
-			capArray[i].function_code = C.enum_osdp_pd_cap_function_code_e(cap.Function)
-			capArray[i].compliance_level = C.uchar(cap.Compliance)
-			capArray[i].num_items = C.uchar(cap.NumItems)
-		}
-		capArray[len(capabilities)].function_code = C.OSDP_PD_CAP_SENTINEL
-		capArray[len(capabilities)].compliance_level = 0
-		capArray[len(capabilities)].num_items = 0
-
-		cInfo.cap = capArrayPtr
-	}
+	cInfo, cleanup := pdInfo.asCStruct()
+	defer cleanup()
 
 	pd.ctx = (*C.osdp_t)(C.osdp_pd_setup(pd.channel, &cInfo))
 	if pd.ctx == nil {
 		freeCChannel(pd.channel)
 		pd.channel = nil
 		return nil, fmt.Errorf("failed to create OSDP PD context")
+	}
+	if pdInfo.FileOperations != nil {
+		if err := registerFileOperations(pd.ctx, 0, pdInfo.FileOperations); err != nil {
+			C.osdp_pd_teardown(unsafe.Pointer(pd.ctx))
+			freeCChannel(pd.channel)
+			return nil, err
+		}
 	}
 
 	// Register this PD against an opaque handle and wire the C callbacks up
@@ -427,28 +414,6 @@ func pdEventCompletionWrapper(arg unsafe.Pointer, cEvent *C.struct_osdp_event, s
 		// Dispatch off the refresh goroutine so the handler may call PD APIs.
 		go handler(goEvent, CompletionStatus(status))
 	}
-}
-
-// SetCapabilities replaces this PD's advertised capabilities. The capabilities
-// are copied into libosdp; an OSDP_PD_CAP_SENTINEL terminator is appended automatically.
-func (pd *PeripheralDevice) SetCapabilities(capabilities []PdCapability) error {
-	pd.mu.Lock()
-	defer pd.mu.Unlock()
-	if pd.ctx == nil {
-		return fmt.Errorf("peripheral device context is not initialized")
-	}
-
-	arr := make([]C.struct_osdp_pd_cap, len(capabilities)+1)
-	for i, c := range capabilities {
-		arr[i].function_code = C.enum_osdp_pd_cap_function_code_e(c.Function)
-		arr[i].compliance_level = C.uchar(c.Compliance)
-		arr[i].num_items = C.uchar(c.NumItems)
-	}
-	arr[len(capabilities)].function_code = C.OSDP_PD_CAP_SENTINEL
-
-	C.osdp_pd_set_capabilities(unsafe.Pointer(pd.ctx), &arr[0])
-	pd.capabilities = capabilities
-	return nil
 }
 
 // SCWait blocks until this PD has an active secure channel or timeout elapses.

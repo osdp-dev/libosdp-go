@@ -48,7 +48,7 @@ func newPDLoggingAt(t *testing.T, level osdp.LogLevel) {
 	t.Cleanup(func() { ch.Close() })
 	info := testPdInfo(0) // no SCBK and no install mode: libosdp warns
 	info.Address = 7
-	pd, err := osdp.NewPeripheralDevice(ch, info, nil, level)
+	pd, err := osdp.NewPeripheralDevice(ch, info, level)
 	if err != nil {
 		t.Fatal(err)
 	}
