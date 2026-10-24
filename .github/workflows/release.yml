@@ -23,10 +23,10 @@ jobs:
     name: Verify and release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: 'stable'
       - name: Vet, build, and test the tagged commit
